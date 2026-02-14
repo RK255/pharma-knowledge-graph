@@ -23,6 +23,31 @@ PRIMARY_TTYS = {
 # Define synonym TTYs
 SYNONYM_TTYS = {'SY', 'PSN', 'TMSY'}
 
+# Define RxNorm 5-level hierarchy groups
+RXNORM_HIERARCHY = {
+    "Molecular/Chemical Level": {
+        "PIN": "Precise Ingredient",
+        "IN": "Ingredient"
+    },
+    "Component Level": {
+        "SCDC": "Semantic Clinical Drug Component",
+        "SBDC": "Semantic Branded Drug Component"
+    },
+    "Complete Drug Level": {
+        "SCD": "Semantic Clinical Drug",
+        "SBD": "Semantic Branded Drug"
+    },
+    "Form/Packaging Level": {
+        "DF": "Dose Form",
+        "GPCK": "Generic Pack",
+        "BPCK": "Brand Pack"
+    },
+    "Naming/Synonym Level": {
+        "PSN": "Prescribable Name",
+        "SY": "Synonym"
+    }
+}
+
 def get_node_tier(primary_tty):
     """Determine tier based on PRIMARY TTY only - following RxNorm hierarchy exactly"""
     # Molecular/Chemical Level (Most Specific)
@@ -78,6 +103,13 @@ def get_node_tier(primary_tty):
     # Default for any other TTYs
     return 'Other'
 
+def get_rxnorm_hierarchy_level(primary_tty):
+    """Get the RxNorm hierarchy level and description for a TTY"""
+    for level, tty_dict in RXNORM_HIERARCHY.items():
+        if primary_tty in tty_dict:
+            return level, tty_dict[primary_tty]
+    return None, None
+
 def determine_primary_tty(ttys):
     """Determine the primary TTY for a concept with multiple TTYs"""
     # Filter out synonym TTYs
@@ -110,6 +142,7 @@ class RxNormGraphBuilder:
         self.all_relationships = []
         self.provenance_ledger = {}
         self.rxcui_to_id = {}  # Store the mapping here
+        self.selected_zip_file = None  # Store the selected zip file name
         
     def close(self):
         self.driver.close()
@@ -258,13 +291,15 @@ class RxNormGraphBuilder:
                 print("Please enter a number.")
         
         print(f"✅ Selected file: {selected_file}")
+        # Store the selected file for use in extraction
+        self.selected_zip_file = selected_file
         return selected_file
         
     def extract_rxnorm(self, zip_file):
         """Extract RxNorm zip file if needed"""
         print(f"\n--- Extracting {zip_file} ---")
         
-        # Create extraction directory
+        # Create extraction directory using the selected zip file
         extract_dir = os.path.join(EXTRACTED_DIR, zip_file.replace(".zip", "_extracted"))
         
         if os.path.exists(extract_dir):
@@ -349,9 +384,15 @@ class RxNormGraphBuilder:
         """Import concepts with provenance from RXNCONSO.RRF"""
         print("\n--- Importing Provenanced Concepts from RXNCONSO.RRF ---")
         
-        # Find the RXNCONSO.RRF file
+        # Find the RXNCONSO.RRF file - FIXED: Use the selected zip file's extraction directory
         conso_file = None
-        for root, dirs, files in os.walk(EXTRACTED_DIR):
+        extract_dir = os.path.join(EXTRACTED_DIR, self.selected_zip_file.replace(".zip", "_extracted"))
+        
+        if not os.path.exists(extract_dir):
+            print(f"❌ Extracted directory not found: {extract_dir}")
+            return
+            
+        for root, dirs, files in os.walk(extract_dir):
             for file in files:
                 if file == "RXNCONSO.RRF":
                     conso_file = os.path.join(root, file)
@@ -414,9 +455,15 @@ class RxNormGraphBuilder:
         """Import relationships with provenance from RXNREL.RRF"""
         print("\n--- Importing Provenanced Relationships from RXNREL.RRF ---")
         
-        # Find the RXNREL.RRF file
+        # Find the RXNREL.RRF file - FIXED: Use the selected zip file's extraction directory
         rel_file = None
-        for root, dirs, files in os.walk(EXTRACTED_DIR):
+        extract_dir = os.path.join(EXTRACTED_DIR, self.selected_zip_file.replace(".zip", "_extracted"))
+        
+        if not os.path.exists(extract_dir):
+            print(f"❌ Extracted directory not found: {extract_dir}")
+            return
+            
+        for root, dirs, files in os.walk(extract_dir):
             for file in files:
                 if file == "RXNREL.RRF":
                     rel_file = os.path.join(root, file)
@@ -561,6 +608,13 @@ class RxNormGraphBuilder:
                 print("✅ Created index on tier")
             except Exception as e:
                 print(f"⚠️ Index may already exist: {e}")
+            
+            # Create index on rxnorm_hierarchy_level (using Neo4j 5.x syntax)
+            try:
+                session.run("CREATE INDEX rxnorm_hierarchy_level_idx IF NOT EXISTS FOR (c:Tier1) ON (c.rxnorm_hierarchy_level)")
+                print("✅ Created index on rxnorm_hierarchy_level")
+            except Exception as e:
+                print(f"⚠️ Index may already exist: {e}")
                 
     def import_provenanced_nodes(self):
         """Import all concepts with provenance to Neo4j using RxNorm hierarchy tiers and build mapping"""
@@ -575,13 +629,18 @@ class RxNormGraphBuilder:
             # Determine tier based on primary TTY using our hierarchy
             tier = get_node_tier(primary_tty)
             
+            # Get RxNorm hierarchy level and description
+            hierarchy_level, hierarchy_description = get_rxnorm_hierarchy_level(primary_tty)
+            
             concepts.append({
                 'rxcui': rxcui,
                 'name': data['name'],
                 'primary_tty': primary_tty,
                 'all_ttys': list(data['ttys']),
                 'tier': tier,
-                'provenance_rxnorm': data['provenance_rxnorm']
+                'provenance_rxnorm': data['provenance_rxnorm'],
+                'rxnorm_hierarchy_level': hierarchy_level,
+                'rxnorm_hierarchy_description': hierarchy_description
             })
         
         print(f"Prepared {len(concepts)} concepts for import")
@@ -590,6 +649,8 @@ class RxNormGraphBuilder:
         print("\n--- Sample Concepts ---")
         for i, concept in enumerate(concepts[:5]):
             print(f"{i+1}. RxCUI: {concept['rxcui']}, Name: {concept['name']}, Tier: {concept['tier']}, Primary TTY: {concept['primary_tty']}")
+            if concept['rxnorm_hierarchy_level']:
+                print(f"   RxNorm Hierarchy: {concept['rxnorm_hierarchy_level']} - {concept['rxnorm_hierarchy_description']}")
         
         # Group by tier for batch processing
         tier_groups = defaultdict(list)
@@ -599,6 +660,16 @@ class RxNormGraphBuilder:
         print(f"\n--- Tier Distribution ---")
         for tier, tier_concepts in tier_groups.items():
             print(f"{tier}: {len(tier_concepts)} concepts")
+        
+        # Show RxNorm hierarchy distribution
+        print(f"\n--- RxNorm Hierarchy Distribution ---")
+        hierarchy_groups = defaultdict(list)
+        for concept in concepts:
+            if concept['rxnorm_hierarchy_level']:
+                hierarchy_groups[concept['rxnorm_hierarchy_level']].append(concept)
+        
+        for level, level_concepts in hierarchy_groups.items():
+            print(f"{level}: {len(level_concepts)} concepts")
         
         # Initialize the RxCUI to ID mapping
         self.rxcui_to_id = {}
@@ -623,7 +694,9 @@ class RxNormGraphBuilder:
                         c.primary_tty = concept.primary_tty, 
                         c.all_ttys = concept.all_ttys, 
                         c.tier = concept.tier, 
-                        c.provenance_rxnorm = concept.provenance_rxnorm
+                        c.provenance_rxnorm = concept.provenance_rxnorm,
+                        c.rxnorm_hierarchy_level = concept.rxnorm_hierarchy_level,
+                        c.rxnorm_hierarchy_description = concept.rxnorm_hierarchy_description
                     RETURN c.rxcui AS rxcui, id(c) AS id
                     """
                     
@@ -787,6 +860,18 @@ class RxNormGraphBuilder:
             
             for record in result:
                 print(f"{record['tier']}: {record['count']} nodes")
+            
+            # Count nodes by RxNorm hierarchy level
+            print("\n--- Node Counts by RxNorm Hierarchy Level ---")
+            result = session.run("""
+            MATCH (c:Tier1)
+            WHERE c.rxnorm_hierarchy_level IS NOT NULL
+            RETURN c.rxnorm_hierarchy_level AS level, count(*) AS count
+            ORDER BY count DESC
+            """)
+            
+            for record in result:
+                print(f"{record['level']}: {record['count']} nodes")
             
             # Count all nodes
             result = session.run("MATCH (n:Tier1) RETURN count(n) as count").single()
