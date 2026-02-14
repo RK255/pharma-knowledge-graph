@@ -6,19 +6,18 @@ import zipfile
 from collections import defaultdict
 from neo4j import GraphDatabase
 
-# Configuration
-BASE_DIR = "/home/kage/graph_workshop/data"
-RAW_DATA_DIR = f"{BASE_DIR}/raw_data"
+# Configuration - UPDATED FOR SERVER
+BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
+RAW_DATA_DIR = f"{BASE_DIR}/data/raw_data"
 EXTRACTED_DIR = f"{RAW_DATA_DIR}/extracted_rrf"
-LEDGER_FILE = f"{BASE_DIR}/provenance/Granular_Provenance_Ledger.json"
+LEDGER_FILE = f"{BASE_DIR}/data/provenance/Granular_Provenance_Ledger.json"
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "BowserNodes"  # Replace with your actual password
 
 # Define primary TTYs (non-synonym types)
 PRIMARY_TTYS = {
-    'IN', 'PIN', 'MIN', 'SCDC', 'SCDF', 'SCDFP', 'SCDG', 'SCDGP', 'SCD',
-    'SBDC', 'SBDF', 'SBDFP', 'SBDG', 'SBD', 'BN', 'DF', 'DFG', 'GPCK', 'BPCK'
+    'IN', 'PIN', 'MIN', 'SCDC', 'SCDF', 'SCDFP', 'SCDG', 'SCDGP', 'SCD', 'SBDC', 'SBDF', 'SBDFP', 'SBDG', 'SBD', 'BN', 'DF', 'DFG', 'GPCK', 'BPCK'
 }
 
 # Define synonym TTYs
@@ -26,7 +25,6 @@ SYNONYM_TTYS = {'SY', 'PSN', 'TMSY'}
 
 def get_node_tier(primary_tty):
     """Determine tier based on PRIMARY TTY only - following RxNorm hierarchy exactly"""
-    
     # Molecular/Chemical Level (Most Specific)
     if primary_tty == 'PIN':
         return 'PreciseIngredient'
@@ -82,7 +80,6 @@ def get_node_tier(primary_tty):
 
 def determine_primary_tty(ttys):
     """Determine the primary TTY for a concept with multiple TTYs"""
-    
     # Filter out synonym TTYs
     primary_ttys = [tty for tty in ttys if tty in PRIMARY_TTYS]
     
@@ -93,10 +90,10 @@ def determine_primary_tty(ttys):
     # Priority order for selecting primary TTY when multiple exist
     priority_order = [
         'SCD', 'SBD', 'MIN',  # Most specific drug products
-        'IN', 'PIN',         # Ingredients
-        'BN',                # Brand names
-        'SCDC', 'SBDC',      # Components
-        'DF', 'GPCK', 'BPCK' # Forms and packs
+        'IN', 'PIN',  # Ingredients
+        'BN',  # Brand names
+        'SCDC', 'SBDC',  # Components
+        'DF', 'GPCK', 'BPCK'  # Forms and packs
     ]
     
     for tty in priority_order:
@@ -113,10 +110,10 @@ class RxNormGraphBuilder:
         self.all_relationships = []
         self.provenance_ledger = {}
         self.rxcui_to_id = {}  # Store the mapping here
-    
+        
     def close(self):
         self.driver.close()
-    
+        
     def run(self):
         print("=== RxNorm Provenanced Graph Builder ===")
         print("Focus: Complete Data Import with Provenance + RxNorm Hierarchy Tiers")
@@ -143,10 +140,10 @@ class RxNormGraphBuilder:
         self.verify_and_save()
         
         print("\n=== Provenanced Graph Built Successfully ===")
-    
+        
     def clear_rxcui_cache(self):
         """Clear the RxCUI to ID cache file"""
-        cache_file = f"{BASE_DIR}/import_csvs/rxcui_id_cache.json"
+        cache_file = f"{BASE_DIR}/data/import_csvs/rxcui_id_cache.json"
         if os.path.exists(cache_file):
             try:
                 os.remove(cache_file)
@@ -155,7 +152,7 @@ class RxNormGraphBuilder:
                 print(f"⚠️ Error clearing cache file: {e}")
         else:
             print("No cache file to clear")
-    
+        
     def clear_existing_data(self):
         """Clear all existing nodes and relationships from Neo4j"""
         print("\n--- Clearing Existing Data ---")
@@ -167,6 +164,7 @@ class RxNormGraphBuilder:
             # Count before deletion
             result = session.run("MATCH (n) RETURN count(n) as count").single()
             node_count = result['count'] if result else 0
+            
             result = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()
             rel_count = result['count'] if result else 0
             
@@ -206,6 +204,7 @@ class RxNormGraphBuilder:
                 # Verify everything is gone
                 result = session.run("MATCH (n) RETURN count(n) as count").single()
                 node_count = result['count'] if result else 0
+                
                 result = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()
                 rel_count = result['count'] if result else 0
                 
@@ -217,14 +216,14 @@ class RxNormGraphBuilder:
                     print("Attempting alternative clearing method...")
                     try:
                         session.run("CALL apoc.schema.assert({}, {})")  # Clear schema
-                        session.run("MATCH (n) CALL apoc.path.expandConfig(n, {}) YIELD path DETACH DELETE n")  # Delete all nodes
+                        session.run("MATCH (n) CALL apoc.path.expandConfig(n, {}) YIELD path DETACH DELETE n")  # Delete all nodes except
                     except Exception as e:
                         print(f"Alternative clearing failed: {e}")
                 else:
                     print("✅ Successfully cleared all data")
             else:
                 print("✅ No existing data to clear")
-    
+                
     def select_rxnorm_file(self):
         """Select RxNorm file to process"""
         print("\n--- Select RxNorm File ---")
@@ -232,12 +231,16 @@ class RxNormGraphBuilder:
         # Find available RxNorm zip files
         zip_files = []
         for file in os.listdir(RAW_DATA_DIR):
-            if file.startswith("RxNorm_") and file.endswith(".zip"):
+            # Fixed pattern: looking for files that start with "RxNorm" (not "RxNorm_")
+            if file.startswith("RxNorm") and file.endswith(".zip"):
                 zip_files.append(file)
         
         if not zip_files:
             print("❌ No RxNorm zip files found")
             return None
+        
+        # Sort files by date (newest first)
+        zip_files.sort(reverse=True)
         
         print("Available RxNorm files:")
         for i, file in enumerate(zip_files, 1):
@@ -254,8 +257,9 @@ class RxNormGraphBuilder:
             except ValueError:
                 print("Please enter a number.")
         
+        print(f"✅ Selected file: {selected_file}")
         return selected_file
-    
+        
     def extract_rxnorm(self, zip_file):
         """Extract RxNorm zip file if needed"""
         print(f"\n--- Extracting {zip_file} ---")
@@ -275,7 +279,7 @@ class RxNormGraphBuilder:
         
         print(f"✅ Extracted to {extract_dir}")
         return extract_dir
-    
+        
     def load_provenance_ledger(self):
         """Load existing provenance ledger or create a new one"""
         print("\n--- Loading Provenance Ledger ---")
@@ -288,7 +292,7 @@ class RxNormGraphBuilder:
             self.provenance_ledger = {}
             os.makedirs(os.path.dirname(LEDGER_FILE), exist_ok=True)
             print("✅ Created new provenance ledger")
-    
+            
     def create_provenance_record(self, data_type, source, source_file, **kwargs):
         """Create a provenance record and return its hash"""
         # Base metadata
@@ -303,13 +307,13 @@ class RxNormGraphBuilder:
         # Add additional metadata
         for key, value in kwargs.items():
             metadata[key] = value
-        
+            
         # Create full citation
         if source == "rxnorm":
             metadata["full_citation"] = f"RxNorm (Prescribable Content). National Library of Medicine. Dataset released on {metadata['date_published']}. Accessed on {metadata['date_accessed']}."
         else:
             metadata["full_citation"] = f"Connectivity enhancement based on algorithmic analysis. Generated on {metadata['date_accessed']}."
-        
+            
         # Create hash
         prov_hash = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode('utf-8')).hexdigest()[:16]
         
@@ -317,7 +321,7 @@ class RxNormGraphBuilder:
         self.provenance_ledger[prov_hash] = metadata
         
         return prov_hash
-    
+        
     def build_complete_graph(self):
         """Build the complete graph with provenance"""
         print("\n--- Building Complete Graph with Provenance ---")
@@ -340,7 +344,7 @@ class RxNormGraphBuilder:
         # Check enhanced relationships
         enhanced_count = len([r for r in self.all_relationships if 'provenance_enhancement' in r])
         print(f"Enhanced relationships: {enhanced_count}")
-    
+        
     def import_provenanced_concepts(self):
         """Import concepts with provenance from RXNCONSO.RRF"""
         print("\n--- Importing Provenanced Concepts from RXNCONSO.RRF ---")
@@ -405,7 +409,7 @@ class RxNormGraphBuilder:
                 processed_count += 1
         
         print(f"✅ Imported {len(self.all_rxcuis)} distinct RxCUIs with provenance")
-    
+        
     def import_provenanced_relationships(self):
         """Import relationships with provenance from RXNREL.RRF"""
         print("\n--- Importing Provenanced Relationships from RXNREL.RRF ---")
@@ -475,7 +479,7 @@ class RxNormGraphBuilder:
         # Show relationship types
         rel_types = set(rel['relationship'] for rel in self.all_relationships)
         print(f"✅ Found {len(rel_types)} relationship types: {', '.join(sorted(rel_types))}")
-    
+        
     def enhance_connectivity(self):
         """Enhance connectivity by adding strategic relationships"""
         print("\n--- Enhancing Graph Connectivity ---")
@@ -515,7 +519,7 @@ class RxNormGraphBuilder:
                         enhanced_rels += 1
         
         print(f"✅ Enhanced connectivity with {enhanced_rels} additional relationships")
-    
+        
     def import_to_neo4j(self):
         """Import all concepts and relationships to Neo4j"""
         print("\n--- Importing to Neo4j ---")
@@ -531,7 +535,7 @@ class RxNormGraphBuilder:
         
         # Create provenance indexes
         self.create_provenance_indexes()
-    
+        
     def create_constraints_and_indexes(self):
         """Create constraints and indexes in Neo4j"""
         print("\n--- Creating Constraints and Indexes ---")
@@ -557,7 +561,7 @@ class RxNormGraphBuilder:
                 print("✅ Created index on tier")
             except Exception as e:
                 print(f"⚠️ Index may already exist: {e}")
-    
+                
     def import_provenanced_nodes(self):
         """Import all concepts with provenance to Neo4j using RxNorm hierarchy tiers and build mapping"""
         print("\n--- Importing Provenanced Nodes with RxNorm Hierarchy Tiers ---")
@@ -610,16 +614,17 @@ class RxNormGraphBuilder:
                     batch = tier_concepts[i:i+batch_size]
                     
                     # Use CREATE with the specific tier label and return the created nodes
+                    # FIXED: Using id() instead of elementId() for compatibility with older Neo4j versions
                     query = f"""
                     UNWIND $concepts AS concept
                     CREATE (c:Tier1:{tier})
-                    SET c.rxcui = concept.rxcui,
-                        c.name = concept.name,
-                        c.primary_tty = concept.primary_tty,
-                        c.all_ttys = concept.all_ttys,
-                        c.tier = concept.tier,
+                    SET c.rxcui = concept.rxcui, 
+                        c.name = concept.name, 
+                        c.primary_tty = concept.primary_tty, 
+                        c.all_ttys = concept.all_ttys, 
+                        c.tier = concept.tier, 
                         c.provenance_rxnorm = concept.provenance_rxnorm
-                    RETURN c.rxcui AS rxcui, elementId(c) AS id
+                    RETURN c.rxcui AS rxcui, id(c) AS id
                     """
                     
                     result = session.run(query, concepts=batch)
@@ -630,32 +635,30 @@ class RxNormGraphBuilder:
                     
                     if (i + batch_size) % 10000 == 0 or i + batch_size >= len(tier_concepts):
                         percent = min(i + batch_size, len(tier_concepts)) / len(tier_concepts) * 100
-                        print(f"  Processed {min(i + batch_size, len(tier_concepts))}/{len(tier_concepts)} ({percent:.1f}%)")
+                        print(f" Processed {min(i + batch_size, len(tier_concepts))}/{len(tier_concepts)} ({percent:.1f}%)")
                 
                 # Check count for this tier
                 result = session.run(f"MATCH (n:Tier1:{tier}) RETURN count(n) as count").single()
-                print(f"  Current {tier} node count in Neo4j: {result['count']}")
+                print(f" Current {tier} node count in Neo4j: {result['count']}")
         
         print(f"✅ Imported {len(concepts)} nodes with RxNorm hierarchy tiers and provenance")
         print(f"✅ Built mapping for {len(self.rxcui_to_id)} nodes")
         
         # Save the mapping to cache for future use
-        cache_file = f"{BASE_DIR}/import_csvs/rxcui_id_cache.json"
+        cache_file = f"{BASE_DIR}/data/import_csvs/rxcui_id_cache.json"
         try:
             cache_data = {
                 'node_count': len(self.rxcui_to_id),
                 'rxcui_lookup': self.rxcui_to_id,
                 'created': '2026-02-14'
             }
-            
             os.makedirs(os.path.dirname(cache_file), exist_ok=True)
             with open(cache_file, 'w') as f:
                 json.dump(cache_data, f)
-            
             print(f"✅ Saved RxCUI to ID mapping to {cache_file}")
         except Exception as e:
             print(f"⚠️ Error saving mapping: {e}")
-    
+                
     def import_provenanced_relationships_to_neo4j(self):
         """Import all relationships with provenance to Neo4j using the pre-built mapping"""
         print("\n--- Importing Provenanced Relationships (Using Pre-built Mapping) ---")
@@ -667,7 +670,7 @@ class RxNormGraphBuilder:
         
         print(f"Found {len(rels_by_type)} unique relationship types")
         for rel_type, rels in rels_by_type.items():
-            print(f"  {rel_type}: {len(rels)} relationships")
+            print(f" {rel_type}: {len(rels)} relationships")
         
         # Check if we have a mapping available
         if not hasattr(self, 'rxcui_to_id') or len(self.rxcui_to_id) == 0:
@@ -716,19 +719,20 @@ class RxNormGraphBuilder:
                         })
                     
                     # Special handling for SIMILAR_INGREDIENT relationships
+                    # FIXED: Using id() instead of elementId() for compatibility with older Neo4j versions
                     if rel_type == 'SIMILAR_INGREDIENT':
                         query = """
                         UNWIND $rels AS rel
-                        MATCH (source) WHERE elementId(source) = rel.source_id
-                        MATCH (target) WHERE elementId(target) = rel.target_id
+                        MATCH (source) WHERE id(source) = rel.source_id
+                        MATCH (target) WHERE id(target) = rel.target_id
                         MERGE (source)-[r:SIMILAR_INGREDIENT]->(target)
                         SET r.provenance_enhancement = rel.provenance_enhancement
                         """
                     else:
                         query = f"""
                         UNWIND $rels AS rel
-                        MATCH (source) WHERE elementId(source) = rel.source_id
-                        MATCH (target) WHERE elementId(target) = rel.target_id
+                        MATCH (source) WHERE id(source) = rel.source_id
+                        MATCH (target) WHERE id(target) = rel.target_id
                         MERGE (source)-[r:{rel_type}]->(target)
                         SET r.provenance_rxnorm = rel.provenance_rxnorm
                         """
@@ -739,15 +743,15 @@ class RxNormGraphBuilder:
                     if processed_rels % 20000 == 0 or processed_rels == len(valid_rels):
                         percent = processed_rels / len(valid_rels) * 100
                         print(f"Processed {processed_rels}/{len(valid_rels)} ({percent:.1f}%)")
-                        
-                        # Check actual count in Neo4j
-                        result = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()
-                        print(f"Current relationship count in Neo4j: {result['count']}")
+                
+                # Check actual count in Neo4j
+                result = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()
+                print(f"Current relationship count in Neo4j: {result['count']}")
             
             print(f"✅ Imported {len(valid_rels)} relationships of type '{rel_type}'")
         
         print(f"✅ Imported {len(self.all_relationships)} relationships with provenance")
-    
+                
     def create_provenance_indexes(self):
         """Create indexes for provenance properties"""
         print("\n--- Creating Provenance Indexes ---")
@@ -765,7 +769,7 @@ class RxNormGraphBuilder:
                 print("✅ Created provenance_enhancement index for SIMILAR_INGREDIENT relationships")
             except Exception as e:
                 print(f"⚠️ Index may already exist: {e}")
-    
+                
     def verify_and_save(self):
         """Verify the imported graph and save the provenance ledger"""
         print("\n" + "="*60)
@@ -838,7 +842,7 @@ class RxNormGraphBuilder:
             print(f"Provenance ledger file: {LEDGER_FILE}")
             
             # Save verification report
-            report_file = f"{BASE_DIR}/import_csvs/provenanced_graph_verification_2026-02-14.txt"
+            report_file = f"{BASE_DIR}/data/import_csvs/provenanced_graph_verification_2026-02-14.txt"
             with open(report_file, 'w') as f:
                 f.write(f"RxNorm Graph Verification Report\n")
                 f.write(f"Generated: 2026-02-14\n\n")
@@ -854,6 +858,8 @@ if __name__ == "__main__":
         builder.run()
     except Exception as e:
         print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         if 'builder' in locals():
             builder.close()
