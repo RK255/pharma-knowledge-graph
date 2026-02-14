@@ -6,6 +6,7 @@ import hashlib
 import ftplib
 import datetime
 import pandas as pd
+import pickle
 from neo4j import GraphDatabase
 from collections import defaultdict
 
@@ -27,43 +28,35 @@ class PubChemEnricher:
         self.driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         self.provenance_ledger = {}
         self.in_nodes = []
+        self.matched_nodes = []
+        self.unmatched_nodes = []
         
     def close(self):
         self.driver.close()
         
     def run(self):
         print("=== Clean RxNorm IN Node PubChem Enrichment ===")
-        
         # Step 1: Load provenance ledger
         self.load_provenance_ledger()
-        
         # Step 2: Extract IN nodes from Neo4j
         self.extract_in_nodes()
-        
         # Step 3: Download latest PubChem CID-Synonym file
         synonym_file = self.download_latest_pubchem_file()
-        
         # Step 4: Build or load synonym to CID mapping
         synonym_to_cid = self.get_synonym_to_cid_mapping(synonym_file)
-        
         # Step 5: Match IN nodes to PubChem CIDs
-        matched_in_nodes = self.match_in_nodes_to_cids(synonym_to_cid)
-        
+        self.match_in_nodes_to_cids(synonym_to_cid)
         # Step 6: Export matched data to CSV
-        self.export_results(matched_in_nodes)
-        
+        self.export_results()
         # Step 7: IMPORT TO NEO4J - NEW STEP
-        self.import_to_neo4j(matched_in_nodes)
-        
+        self.import_to_neo4j()
         # Step 8: Save provenance ledger
         self.save_provenance_ledger()
-        
         print("\n=== PubChem Enrichment Complete ===")
         
     def load_provenance_ledger(self):
         """Load existing provenance ledger or create a new one"""
         print("\n--- Loading Provenance Ledger ---")
-        
         if os.path.exists(LEDGER_FILE):
             with open(LEDGER_FILE, 'r') as f:
                 self.provenance_ledger = json.load(f)
@@ -105,24 +98,17 @@ class PubChemEnricher:
     def extract_in_nodes(self):
         """Extract all IN nodes from Neo4j"""
         print("\n--- Extracting IN Nodes from Neo4j ---")
-        
         with self.driver.session(database="neo4j") as session:
             result = session.run("""
-            MATCH (n:Tier1 {primary_tty: 'IN'})
-            RETURN n.rxcui AS rxcui, n.name AS name, n.provenance_rxnorm AS provenance_rxnorm
+                MATCH (n:Tier1 {primary_tty: 'IN'})
+                RETURN n.rxcui AS rxcui, n.name AS name, n.provenance_rxnorm AS provenance_rxnorm
             """)
-            
-            self.in_nodes = [{"rxcui": record["rxcui"], 
-                             "name": record["name"], 
-                             "provenance_rxnorm": record["provenance_rxnorm"]} 
-                            for record in result]
-        
+            self.in_nodes = [{"rxcui": record["rxcui"], "name": record["name"], "provenance_rxnorm": record["provenance_rxnorm"]} for record in result]
         print(f"✅ Extracted {len(self.in_nodes)} IN nodes from Neo4j")
         
     def download_latest_pubchem_file(self):
         """Download the latest PubChem CID-Synonym file"""
         print("\n--- Downloading Latest PubChem CID-Synonym File ---")
-        
         # Create directory if it doesn't exist
         os.makedirs(PUBCHEM_DIR, exist_ok=True)
         
@@ -141,19 +127,19 @@ class PubChemEnricher:
                 print(f"✅ Local CID-Synonym-filtered.gz is already up-to-date (version {local_mtime}).")
                 print(f"✅ Using PubChem file: {local_file}")
                 return local_file
-        
+                
         # Download the file
-        print(f"Local file is from N/A, remote is from {release_date}. Downloading latest version...")
+        print(f"Local file is from {local_mtime if os.path.exists(local_file) else 'N/A'}, remote is from {release_date}. Downloading latest version...")
         try:
             with ftplib.FTP(FTP_HOST) as ftp:
                 ftp.login()
                 with open(local_file, 'wb') as f:
                     ftp.retrbinary(f"RETR {FTP_PATH}", f.write)
-            
-            # Set file modification time to release date
-            release_timestamp = datetime.datetime.strptime(release_date, "%Y-%m-%d").timestamp()
-            os.utime(local_file, (release_timestamp, release_timestamp))
-            
+                
+                # Set file modification time to release date
+                release_timestamp = datetime.datetime.strptime(release_date, "%Y-%m-%d").timestamp()
+                os.utime(local_file, (release_timestamp, release_timestamp))
+                
             print(f"✅ Successfully downloaded CID-Synonym-filtered.gz")
             print(f"✅ Using PubChem file: {local_file}")
             return local_file
@@ -189,18 +175,15 @@ class PubChemEnricher:
         if os.path.exists(cache_file):
             file_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(synonym_file)).strftime("%Y-%m-%d")
             cache_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file)).strftime("%Y-%m-%d")
-            
             if file_mtime == cache_mtime:
                 print(f"✅ Loading cached synonym to CID mapping from {cache_file}")
                 with open(cache_file, 'rb') as f:
                     return pickle.load(f)
-        
+                
         print("Building synonym to CID mapping from scratch...")
-        
         # Build the mapping
         synonym_to_cid = {}
         processed = 0
-        
         try:
             with gzip.open(synonym_file, 'rt', encoding='utf-8') as f:
                 for line in f:
@@ -219,7 +202,6 @@ class PubChemEnricher:
                     # Add to mapping
                     if synonym not in synonym_to_cid:
                         synonym_to_cid[synonym] = cid
-        
         except EOFError:
             # Handle corrupted gzip file
             print(f"❌ Error: The gzip file appears to be corrupted at synonym {processed:,}.")
@@ -228,26 +210,25 @@ class PubChemEnricher:
         except Exception as e:
             print(f"❌ Error processing file: {e}")
             raise
-        
+            
         print(f"✅ Built mapping with {len(synonym_to_cid):,} synonyms for {len(set(synonym_to_cid.values())):,} unique CIDs")
         
         # Cache the mapping
         print(f"✅ Saved synonym to CID mapping to cache: {cache_file}")
         with open(cache_file, 'wb') as f:
             pickle.dump(synonym_to_cid, f)
-        
+            
         return synonym_to_cid
         
     def match_in_nodes_to_cids(self, synonym_to_cid):
         """Match IN nodes to PubChem CIDs"""
         print("\n--- Matching IN Nodes to CIDs (Exact Matches Only) ---")
         
-        matched_nodes = []
-        unmatched_nodes = []
+        self.matched_nodes = []
+        self.unmatched_nodes = []
         
         for node in self.in_nodes:
             name = node['name'].lower()
-            
             # Try exact match
             if name in synonym_to_cid:
                 # Create provenance record for this match
@@ -261,7 +242,7 @@ class PubChemEnricher:
                     match_type="exact"
                 )
                 
-                matched_nodes.append({
+                self.matched_nodes.append({
                     'rxcui': node['rxcui'],
                     'name': node['name'],
                     'rxcui_prov': node['provenance_rxnorm'],
@@ -269,14 +250,12 @@ class PubChemEnricher:
                     'pubchem_cid_prov': prov_hash
                 })
             else:
-                unmatched_nodes.append(node)
+                self.unmatched_nodes.append(node)
+                
+        print(f"✅ Matched {len(self.matched_nodes)} IN nodes to CIDs")
+        print(f"❌ Could not find CID for {len(self.unmatched_nodes)} IN nodes")
         
-        print(f"✅ Matched {len(matched_nodes)} IN nodes to CIDs")
-        print(f"❌ Could not find CID for {len(unmatched_nodes)} IN nodes")
-        
-        return matched_nodes
-        
-    def export_results(self, matched_nodes):
+    def export_results(self):
         """Export matched and unmatched nodes to CSV files"""
         print("\n--- Exporting Clean Results ---")
         
@@ -285,67 +264,63 @@ class PubChemEnricher:
         os.makedirs(output_dir, exist_ok=True)
         
         # Export matched nodes
-        if matched_nodes:
+        if self.matched_nodes:
             date_str = datetime.datetime.now().strftime("%Y%m%d")
             matched_file = os.path.join(output_dir, f"clean_matched_{date_str}.csv")
             
             # Create DataFrame and export
-            df = pd.DataFrame(matched_nodes)
+            df = pd.DataFrame(self.matched_nodes)
             df.to_csv(matched_file, index=False)
-            print(f"✅ Exported {len(matched_nodes)} matched IN nodes to {matched_file}")
-        
+            print(f"✅ Exported {len(self.matched_nodes)} matched IN nodes to {matched_file}")
+            
         # Export unmatched nodes
-        unmatched_nodes = [node for node in self.in_nodes 
-                          if node['rxcui'] not in [m['rxcui'] for m in matched_nodes]]
-        
-        if unmatched_nodes:
+        if self.unmatched_nodes:
             date_str = datetime.datetime.now().strftime("%Y%m%d")
             unmatched_file = os.path.join(output_dir, f"clean_unmatched_{date_str}.csv")
             
             # Create DataFrame and export
-            df = pd.DataFrame(unmatched_nodes)
+            df = pd.DataFrame(self.unmatched_nodes)
             df.to_csv(unmatched_file, index=False)
-            print(f"✅ Exported {len(unmatched_nodes)} unmatched IN nodes to {unmatched_file}")
+            print(f"✅ Exported {len(self.unmatched_nodes)} unmatched IN nodes to {unmatched_file}")
             
-    def import_to_neo4j(self, matched_nodes):
+    def import_to_neo4j(self):
         """Import the matched nodes with PubChem CID to Neo4j - NEW METHOD"""
         print("\n--- Importing PubChem Enrichment to Neo4j ---")
         
-        if not matched_nodes:
+        if not self.matched_nodes:
             print("⚠️ No nodes to import")
             return
-        
+            
         # Create a single provenance record for the enrichment batch
         batch_prov_hash = self.create_provenance_record(
             data_type="batch_enrichment",
             source="pubchem",
             source_file="CID-Synonym-filtered.gz",
             enrichment_type="pubchem_cid",
-            enriched_nodes=len(matched_nodes),
+            enriched_nodes=len(self.matched_nodes),
             date_accessed=datetime.datetime.now().strftime("%Y-%m-%d")
         )
         
         with self.driver.session(database="neo4j") as session:
             # Process in batches
             batch_size = 1000
-            for i in range(0, len(matched_nodes), batch_size):
-                batch = matched_nodes[i:i+batch_size]
+            for i in range(0, len(self.matched_nodes), batch_size):
+                batch = self.matched_nodes[i:i+batch_size]
                 
                 # Update nodes with PubChem CID and provenance
                 query = """
-                UNWIND $nodes AS node
-                MATCH (n:Tier1 {rxcui: node.rxcui})
-                SET n.pubchem_cid = node.pubchem_cid,
-                    n.provenance_pubchem = node.pubchem_cid_prov,
-                    n.batch_provenance = $batch_prov
+                    UNWIND $nodes AS node
+                    MATCH (n:Tier1 {rxcui: node.rxcui})
+                    SET n.pubchem_cid = node.pubchem_cid,
+                        n.provenance_pubchem = node.pubchem_cid_prov,
+                        n.batch_provenance = $batch_prov
                 """
-                
                 session.run(query, nodes=batch, batch_prov=batch_prov_hash)
                 
-                if (i + batch_size) % 5000 == 0 or i + batch_size >= len(matched_nodes):
-                    print(f"Processed {min(i + batch_size, len(matched_nodes))}/{len(matched_nodes)} nodes")
-        
-        print(f"✅ Enriched {len(matched_nodes)} IN nodes with PubChem CIDs in Neo4j")
+                if (i + batch_size) % 5000 == 0 or i + batch_size >= len(self.matched_nodes):
+                    print(f"Processed {min(i + batch_size, len(self.matched_nodes))}/{len(self.matched_nodes)} nodes")
+                    
+        print(f"✅ Enriched {len(self.matched_nodes)} IN nodes with PubChem CIDs in Neo4j")
         
     def save_provenance_ledger(self):
         """Save the provenance ledger"""
@@ -354,21 +329,20 @@ class PubChemEnricher:
         os.makedirs(os.path.dirname(LEDGER_FILE), exist_ok=True)
         with open(LEDGER_FILE, 'w') as f:
             json.dump(self.provenance_ledger, f, indent=2)
-        
+            
         print(f"✅ Saved provenance ledger with {len(self.provenance_ledger)} entries")
         
         # Print summary
         matched_count = len([v for v in self.provenance_ledger.values() 
-                            if v.get('data_type') == 'node_property' and v.get('property_name') == 'pubchem_cid'])
+                           if v.get('data_type') == 'node_property' and v.get('property_name') == 'pubchem_cid'])
         
         print(f"\n=== Clean Enrichment Complete ===")
         print(f"Total IN nodes: {len(self.in_nodes)}")
-        print(f"Nodes enriched with CID: {matched_count}")
-        print(f"Nodes not found in PubChem: {len(self.in_nodes) - matched_count}")
+        print(f"Nodes enriched with CID: {len(self.matched_nodes)}")
+        print(f"Nodes not found in PubChem: {len(self.unmatched_nodes)}")
         print(f"Provenance entries added: {len(self.provenance_ledger)}")
 
 if __name__ == "__main__":
-    import pickle  # Add this import at the top
     try:
         enricher = PubChemEnricher()
         enricher.run()
