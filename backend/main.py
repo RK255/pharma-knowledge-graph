@@ -544,7 +544,7 @@ async def debug_section(section_id: str):
 
 @app.get("/api/grc20/structure/{drug_id}")
 async def get_grc20_structure(drug_id: str):
-    """Get GRC-20 compliant structure for a drug entity"""
+    """Get GRC-20 compliant structure for a drug entity with human-readable labels"""
     if not redis_client:
         raise HTTPException(status_code=500, detail="Redis not available")
     
@@ -556,55 +556,127 @@ async def get_grc20_structure(drug_id: str):
     entity = json.loads(entity_raw)
     
     # Get section IDs
-    section_ids = list(redis_client.smembers(f"pharma:drug:{drug_id}:sections"))[:5]  # Limit to 5 for demo
+    section_ids = list(redis_client.smembers(f"pharma:drug:{drug_id}:sections"))
     
-    # Get a sample section
+    # Get enhanced drug data for context
+    enhanced_raw = redis_client.hget("pharma:enhanced_drugs", drug_id)
+    enhanced = json.loads(enhanced_raw) if enhanced_raw else {}
+    
+    # Get section titles
+    section_titles = []
+    for sid in section_ids[:20]:  # Limit to 20 for display
+        section_raw = redis_client.hget("pharma:entities", sid)
+        if section_raw:
+            section_entity = json.loads(section_raw)
+            # Find the title/content in triples
+            title = "Unknown Section"
+            for triple in section_entity.get('triples', []):
+                val = triple.get('value', {})
+                if isinstance(val, dict):
+                    val = val.get('value', '')
+                val_str = str(val)
+                # Look for section title (usually first text content)
+                if val_str and len(val_str) < 200 and not uuid_pattern.match(val_str):
+                    if len(val_str) < 100 or 'SECTION' in val_str.upper() or any(c.isdigit() for c in val_str[:10]):
+                        title = val_str[:60] + "..." if len(val_str) > 60 else val_str
+                        break
+            section_titles.append({"id": sid, "title": title})
+    
+    # Sample section with title
     sample_section = None
     if section_ids:
         section_raw = redis_client.hget("pharma:entities", section_ids[0])
         if section_raw:
             sample_section = json.loads(section_raw)
     
-    # Format as GRC-20 triples
+    def infer_attribute_label(value, idx):
+        """Infer what attribute this likely represents based on value pattern"""
+        value_str = str(value)
+        
+        if uuid_pattern.match(value_str):
+            return "set_id"
+        
+        if len(value_str) == 22 and all(c in '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz' for c in value_str):
+            return "entity_reference"
+        
+        if len(value_str) == 16 and all(c in '0123456789abcdef' for c in value_str.lower()):
+            return "provenance_hash"
+        
+        value_lower = value_str.lower()
+        
+        if any(word in value_lower for word in ['injection', 'tablet', 'capsule', 'oral', 'mg', 'ml', 'is an', 'are']):
+            return "description"
+        
+        if len(value_str) < 60 and not any(c in value_str for c in ['\n', '.']):
+            return "name"
+        
+        if len(value_str) > 100:
+            return "content"
+        
+        if value_str.isdigit():
+            return "number"
+        
+        return "attribute"
+    
     def format_triples(entity_data):
+        """Format triples with deduplication"""
         triples = []
+        seen = set()
+        
         for triple in entity_data.get('triples', []):
             attr = triple.get('attribute', '')
             val = triple.get('value', {})
+            
             if isinstance(val, dict):
-                val = val.get('value', '')
+                val_str = val.get('value', '')
+            else:
+                val_str = str(val)
+            
+            # Dedupe by attribute+value
+            key = f"{attr}:{val_str[:100]}"
+            if key in seen:
+                continue
+            seen.add(key)
+            
             triples.append({
-                "attribute": attr,
-                "value": str(val)[:100] + "..." if len(str(val)) > 100 else str(val),
-                "value_type": "entity_reference" if isinstance(triple.get('value'), dict) and 'id' in triple.get('value', {}) else "string"
+                "attribute_id": attr,
+                "attribute_label": infer_attribute_label(val_str, len(triples)),
+                "value": val_str[:150] + "..." if len(val_str) > 150 else val_str,
+                "value_full_length": len(val_str),
+                "value_type": "entity_reference" if isinstance(triple.get('value'), dict) else "string"
             })
+        
         return triples
+    
+    formatted_triples = format_triples(entity)
+    
+    # Find section title for sample
+    sample_title = section_titles[0]["title"] if section_titles else "Unknown"
     
     return {
         "drug_entity": {
             "id": drug_id,
-            "id_format": "GRC-20 Base58 (22 chars)",
             "triple_count": len(entity.get('triples', [])),
-            "triples": format_triples(entity)
+            "unique_triple_count": len(formatted_triples),
+            "triples": formatted_triples,
+            "context": {
+                "drug_name": enhanced.get('name', 'Unknown').title(),
+                "manufacturer": enhanced.get('manufacturer', 'Unknown'),
+                "set_id": enhanced.get('set_id', 'Unknown')
+            }
         },
         "relationship": {
             "type": "has_section",
-            "format": "Drug Entity --[has_section]--> Section Entity",
-            "total_sections": len(section_ids) if section_ids else 0,
-            "sample_section_ids": section_ids[:3]
+            "total_sections": len(section_ids),
+            "sample_section_ids": section_ids[:5],
+            "section_titles": section_titles
         },
         "sample_section": {
             "id": section_ids[0] if section_ids else None,
+            "title": sample_title,
             "triple_count": len(sample_section.get('triples', [])) if sample_section else 0,
             "triples": format_triples(sample_section) if sample_section else []
-        } if sample_section else None,
-        "grc20_compliance": {
-            "entity_id_format": "Base58 (Bitcoin alphabet)",
-            "triple_structure": "Entity → [Attribute, Value]",
-            "value_types": ["string", "number", "entity_reference"],
-            "relationship_model": "Outgoing relations stored on source entity",
-            "provenance": "SHA256 hash of FDA document embedded in entity"
-        }
+        } if sample_section else None
     }
 
 @app.get("/section/{section_id}", response_model=SectionDetail)
