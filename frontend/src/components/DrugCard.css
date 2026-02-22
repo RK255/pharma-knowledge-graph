@@ -1,0 +1,147 @@
+.drug-card {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.drug-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.15);
+}
+
+.card-header {
+  padding: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.drug-name {
+  margin: 0;
+  color: #2c3e50;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.relevance-score {
+  color: white;
+  padding: 5px 10px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.card-actions {
+  padding: 0 20px 20px;
+}
+
+.details-button {
+  width: 100%;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.3s;
+}
+
+.details-button:hover:not(:disabled) {
+  background-color: #e9ecef;
+}
+
+.details-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.card-details {
+  border-top: 1px solid #e9ecef;
+  padding: 20px;
+}
+
+.section-count {
+  margin-bottom: 15px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.sections-preview {
+  margin-bottom: 15px;
+}
+
+.section-preview {
+  margin-bottom: 15px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.section-preview:last-child {
+  border-bottom: none;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.section-header h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.provenance-badge {
+  display: flex;
+  align-items: center;
+  background-color: #f8f9fa;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+}
+
+.hash-label {
+  color: #6c757d;
+  margin-right: 5px;
+}
+
+.hash-value {
+  color: #495057;
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.section-preview p {
+  margin: 0;
+  color: #555;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.more-sections {
+  color: #7f8c8d;
+  font-style: italic;
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+}
+
+.provenance-info {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #e9ecef;
+  text-align: center;
+}
+
+.provenance-label {
+  color: #27ae60;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
