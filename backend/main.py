@@ -542,6 +542,70 @@ async def debug_section(section_id: str):
         "raw_triples": section_entity.get('triples', [])
     }
 
+@app.get("/api/grc20/structure/{drug_id}")
+async def get_grc20_structure(drug_id: str):
+    """Get GRC-20 compliant structure for a drug entity"""
+    if not redis_client:
+        raise HTTPException(status_code=500, detail="Redis not available")
+    
+    # Get the raw entity
+    entity_raw = redis_client.hget("pharma:entities", drug_id)
+    if not entity_raw:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    
+    entity = json.loads(entity_raw)
+    
+    # Get section IDs
+    section_ids = list(redis_client.smembers(f"pharma:drug:{drug_id}:sections"))[:5]  # Limit to 5 for demo
+    
+    # Get a sample section
+    sample_section = None
+    if section_ids:
+        section_raw = redis_client.hget("pharma:entities", section_ids[0])
+        if section_raw:
+            sample_section = json.loads(section_raw)
+    
+    # Format as GRC-20 triples
+    def format_triples(entity_data):
+        triples = []
+        for triple in entity_data.get('triples', []):
+            attr = triple.get('attribute', '')
+            val = triple.get('value', {})
+            if isinstance(val, dict):
+                val = val.get('value', '')
+            triples.append({
+                "attribute": attr,
+                "value": str(val)[:100] + "..." if len(str(val)) > 100 else str(val),
+                "value_type": "entity_reference" if isinstance(triple.get('value'), dict) and 'id' in triple.get('value', {}) else "string"
+            })
+        return triples
+    
+    return {
+        "drug_entity": {
+            "id": drug_id,
+            "id_format": "GRC-20 Base58 (22 chars)",
+            "triple_count": len(entity.get('triples', [])),
+            "triples": format_triples(entity)
+        },
+        "relationship": {
+            "type": "has_section",
+            "format": "Drug Entity --[has_section]--> Section Entity",
+            "total_sections": len(section_ids) if section_ids else 0,
+            "sample_section_ids": section_ids[:3]
+        },
+        "sample_section": {
+            "id": section_ids[0] if section_ids else None,
+            "triple_count": len(sample_section.get('triples', [])) if sample_section else 0,
+            "triples": format_triples(sample_section) if sample_section else []
+        } if sample_section else None,
+        "grc20_compliance": {
+            "entity_id_format": "Base58 (Bitcoin alphabet)",
+            "triple_structure": "Entity → [Attribute, Value]",
+            "value_types": ["string", "number", "entity_reference"],
+            "relationship_model": "Outgoing relations stored on source entity",
+            "provenance": "SHA256 hash of FDA document embedded in entity"
+        }
+    }
 
 @app.get("/section/{section_id}", response_model=SectionDetail)
 async def get_section_details(section_id: str):
