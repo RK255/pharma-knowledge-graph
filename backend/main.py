@@ -1,93 +1,62 @@
+"""
+Pharmaceutical Knowledge Graph API
+Production v1 - GRC-20 Backend
+"""
+
 import os
 import json
-import redis
-from fastapi import FastAPI, HTTPException
+import re
+from typing import Optional, List, Dict, Any
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Optional
-import uvicorn
+import redis
 
-# --- Configuration ---
+# Configuration
 DATA_FILE_PATH = "/mnt/fast_raid/server_projects/Geo/graph_workshop/scripts/development/output/grc20_pharmaceutical_data_v10.json"
 ENHANCED_DATA_PATH = "/mnt/fast_raid/server_projects/Geo/graph_workshop/scripts/development/output/enhanced_chunked_documents.json"
 
-# --- GRC-20 IDs ---
-# Attributes
-ATTRIBUTES = {
-    "name": "LuBWqZAu6pz54eiJS5mLv8",
-    "type": "Jfmby78N4BCseZinBmdVov",
-    "description": "LA1DqP5v6QAdsgLPXGF3YA",
-    "content": "LA1DqP5v6QAdsgLPXGF3YA",  # Usually same as description for sections
-    "fda_set_id": "7gzF671tq5JTZ13naG4tnr", # Example ID, verify if needed
-    "provenance_hash": "WQfdWjboZWFuTseDhG5Cw1",
-    "section_type": "AdBRTCMrQjrnFvejKSUM5x"
-}
-
-# Types
-TYPE_IDS = {
-    "drug": "CzNrWVPayq5EB1HXncQFD5",
-    "section": "6YqL5N3vRjFyHc9XzKwE2M", # Example, verify from your data
-    "type": "Jfmby78N4BCseZinBmdVov"
-}
-
-# Reverse mapping for human-readable keys
-ID_TO_NAME = {v: k for k, v in ATTRIBUTES.items()}
-VALUE_MAP = {
-    TYPE_IDS.get("drug"): "Drug",
-    TYPE_IDS.get("section"): "Section"
-}
-
-# Section Ordering (FDA Standard)
-SECTION_ORDER = {
-    'BOXED_WARNINGS': 0,
-    'INDICATIONS_AND_USAGE': 1,
-    'DOSAGE_AND_ADMINISTRATION': 2,
-    'DOSAGE_FORMS_AND_STRENGTHS': 3,
-    'CONTRAINDICATIONS': 4,
-    'WARNINGS_AND_PRECAUTIONS': 5,
-    'ADVERSE_REACTIONS': 6,
-    'DRUG_INTERACTIONS': 7,
-    'USE_IN_SPECIFIC_POPULATIONS': 8,
-    'OVERDOSAGE': 9,
-    'DESCRIPTION': 10,
-    'CLINICAL_PHARMACOLOGY': 11,
-    'NONCLINICAL_TOXICOLOGY': 12,
-    'CLINICAL_STUDIES': 13,
-    'REFERENCES': 14,
-    'HOW_SUPPLIED': 15,
-    'PATIENT_COUNSELING_INFORMATION': 16,
-    'SPL': 17,
-    'UNKNOWN': 99
-}
-
-# --- Redis Setup ---
+# Redis Connection
 redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
-# Check connection
-try:
-    redis_client.ping()
-    print("✅ Connected to Redis")
-except redis.ConnectionError:
-    print("❌ Redis not running. Please start Redis.")
-    redis_client = None
+# FastAPI App
+app = FastAPI(
+    title="Pharmaceutical Knowledge Graph API",
+    description="Production API for FDA drug data with full provenance tracking",
+    version="1.0.0"
+)
 
-# --- Models ---
-class DrugSection(BaseModel):
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global Search Index (in-memory for performance)
+DRUG_SEARCH_INDEX: Dict[str, Dict[str, str]] = {}
+
+# UUID Pattern for Set ID detection
+uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+
+# Pydantic Models
+class ProvenanceData(BaseModel):
+    fda_document_id: str
+    drug_name: str
+    set_id: str
+    section_type: str
+    title: str
+    citation: str
+    type: str
+
+class SectionSummary(BaseModel):
+    section_id: str
     section_type: str
     title: str
     content_preview: str
-    provenance_hash: str
-    section_id: str
-
-class ProvenanceData(BaseModel):
-    fda_document_id: str
-    drug_name: str = ""
-    set_id: str = ""
-    section_type: str = ""
-    title: str = ""
-    citation: str = ""
-    type: str = "section"
 
 class SectionDetail(BaseModel):
     section_id: str
@@ -96,35 +65,44 @@ class SectionDetail(BaseModel):
     content: str
     provenance: ProvenanceData
 
-class DrugResponse(BaseModel):
-    status: str
-    drug_name: str
+class DrugDetail(BaseModel):
+    drug_id: str
+    name: str
     set_id: str
+    nda: str
+    ndc: str
+    manufacturer: str
+    ama_citation: str
+    sections: List[SectionSummary]
+    section_count: int
+
+class SearchSuggestion(BaseModel):
+    id: str
+    name: str
+    set_id: str
+
+class StatsResponse(BaseModel):
+    total_drugs: int
     total_sections: int
-    sections: List[DrugSection]
-    metadata: Dict[str, str] = {}
+    total_links: int
+    enhanced_matched: int
+    search_index_size: int
 
-class SuggestionResponse(BaseModel):
-    suggestions: List[Dict[str, str]]
-
-# --- In-Memory Search Index ---
-DRUG_SEARCH_INDEX = {}
 
 def build_memory_index():
+    """Build in-memory search index from Redis"""
     global DRUG_SEARCH_INDEX
     DRUG_SEARCH_INDEX = {}
-    if not redis_client: return
+    if not redis_client:
+        return
     
     print("Building in-memory search index...")
     count = 0
-    # Iterate over the enhanced_drugs hash for faster loading
     for entity_id, data_str in redis_client.hscan_iter("pharma:enhanced_drugs"):
         try:
             data = json.loads(data_str)
             name = data.get('name')
             if name:
-                # Simple index: lowercase name -> entity_id
-                # Stores the first match (or you could handle duplicates here)
                 if name not in DRUG_SEARCH_INDEX:
                     DRUG_SEARCH_INDEX[name] = {
                         "id": entity_id,
@@ -133,13 +111,13 @@ def build_memory_index():
                     }
                     count += 1
         except Exception as e:
+            print(f"Error indexing {entity_id}: {e}")
             continue
             
     print(f"✅ Search index built with {count} drugs")
 
-
-# --- Data Loader ---
 def load_data_to_redis():
+    """Load GRC-20 data into Redis with proper Drug/Section/Relationship handling"""
     global DRUG_SEARCH_INDEX
     
     if not redis_client:
@@ -150,11 +128,7 @@ def load_data_to_redis():
         build_memory_index()
         return True
 
-    # --- Helper: Strict UUID Check ---
-    import re
-    uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
-
-    # 1. Load Enhanced Metadata
+    # Load Enhanced Metadata
     enhanced_metadata = {}
     if os.path.exists(ENHANCED_DATA_PATH):
         print(f"Loading Enhanced Metadata from {ENHANCED_DATA_PATH}...")
@@ -178,7 +152,7 @@ def load_data_to_redis():
         except Exception as e:
             print(f"Error loading enhanced metadata: {e}")
 
-    # 2. Load GRC-20 Entities
+    # Load GRC-20 Entities
     print(f"Loading GRC-20 data from {DATA_FILE_PATH}...")
     if not os.path.exists(DATA_FILE_PATH):
         print(f"❌ ERROR: Data file not found at {DATA_FILE_PATH}")
@@ -191,47 +165,28 @@ def load_data_to_redis():
     total_entities = len(entities)
     print(f"Processing {total_entities} entities...")
 
-    # --- PHASE 1: IDENTIFY DRUG NODES ---
-    print("Phase 1: Identifying Drug Nodes...")
+    # PHASE 1: Build ID Maps
+    print("Phase 1: Building ID maps...")
     
+    # Map entity_id -> entity for fast lookup
+    entity_map = {}
+    
+    # Identify Drugs (entities with UUID Set ID)
     all_drug_ids = set()
+    
+    # Identify Relationship entities and their targets
+    relationship_targets = {}  # drug_id -> [section_ids]
+    
+    # Identify potential sections (entities that are targets of relationships)
+    potential_section_ids = set()
+    
     name_attr_id = None
     
     for i, entity in enumerate(entities):
         entity_id = entity.get('id')
         if not entity_id: continue
         
-        # Check attributes for a UUID (Set ID)
-        for triple in entity.get('triples', []):
-            val = triple.get('value')
-            if isinstance(val, dict): val = val.get('value', '')
-            if isinstance(val, str) and uuid_pattern.match(val):
-                all_drug_ids.add(entity_id) # Store the ENTITY ID
-                break
-            
-            # Detect name attribute
-            if not name_attr_id and isinstance(val, str) and len(val) > 0 and len(val) < 100:
-                name_attr_id = triple.get('attribute')
-
-        if (i + 1) % 100000 == 0:
-            print(f"Phase 1 Scanned {i+1}/{total_entities}... (Found {len(all_drug_ids)} Drugs)")
-
-    print(f"Phase 1 Complete. Found {len(all_drug_ids)} Drug Nodes.")
-
-    # --- PHASE 2: STORE DRUGS & IDENTIFY SECTIONS ---
-    # If an entity points to a Drug, IT IS A SECTION.
-    print("Phase 2: Storing Drugs and Discovering Sections...")
-    
-    pipeline = redis_client.pipeline()
-    drug_count = 0
-    section_count = 0
-    link_count = 0
-    matched_count = 0
-    missed_count = 0
-    
-    for i, entity in enumerate(entities):
-        entity_id = entity.get('id')
-        if not entity_id: continue
+        entity_map[entity_id] = entity
         
         # Extract attributes
         attrs = {}
@@ -240,8 +195,55 @@ def load_data_to_redis():
             val = triple.get('value')
             if isinstance(val, dict): val = val.get('value', '')
             attrs[attr] = val
+            
+            if not name_attr_id and isinstance(val, str) and len(val) > 0 and len(val) < 100:
+                name_attr_id = attr
+        
+        # Check if this is a Drug (has UUID)
+        for v in attrs.values():
+            if isinstance(v, str) and uuid_pattern.match(v):
+                all_drug_ids.add(entity_id)
+                break
+        
+        # Check if this is a Relationship entity
+        source = attrs.get('source')
+        target = attrs.get('target')
+        rel_type = attrs.get('relationship_type')
+        
+        if source and target and rel_type:
+            # This is a relationship entity
+            if rel_type == 'has_section' or 'section' in rel_type.lower():
+                if source in all_drug_ids or target in all_drug_ids:
+                    # The target is a section, the source is a drug
+                    potential_section_ids.add(target)
+                    if source not in relationship_targets:
+                        relationship_targets[source] = []
+                    relationship_targets[source].append(target)
 
-        # 1. Handle Drug Nodes
+        if (i + 1) % 100000 == 0:
+            print(f"Phase 1 Scanned {i+1}/{total_entities}... (Drugs: {len(all_drug_ids)}, Sections: {len(potential_section_ids)})")
+
+    print(f"Phase 1 Complete. Found {len(all_drug_ids)} Drugs, {len(potential_section_ids)} Sections")
+
+    # PHASE 2: Store Everything
+    print("Phase 2: Storing entities...")
+    
+    pipeline = redis_client.pipeline()
+    drug_count = 0
+    section_count = 0
+    link_count = 0
+    matched_count = 0
+    missed_count = 0
+    
+    for i, (entity_id, entity) in enumerate(entity_map.items()):
+        attrs = {}
+        for triple in entity.get('triples', []):
+            attr = triple.get('attribute')
+            val = triple.get('value')
+            if isinstance(val, dict): val = val.get('value', '')
+            attrs[attr] = val
+
+        # Store Drug
         if entity_id in all_drug_ids:
             pipeline.hset("pharma:entities", entity_id, json.dumps(entity))
             pipeline.sadd("pharma:drugs", entity_id)
@@ -268,32 +270,23 @@ def load_data_to_redis():
                 "ama_citation": extra.get('ama_citation', 'N/A'),
                 "manufacturer": extra.get('manufacturer', 'Unknown')
             }))
-
-        # 2. Handle Sections (Entities that point to Drugs)
-        else:
-            # Check if this entity points to a Drug
-            found_drug_id = None
             
-            for v in attrs.values():
-                if isinstance(v, str) and v in all_drug_ids:
-                    found_drug_id = v
-                    break
-            
-            if found_drug_id:
-                # THIS ENTITY IS A SECTION
-                pipeline.hset("pharma:entities", entity_id, json.dumps(entity))
-                pipeline.sadd("pharma:sections", entity_id)
-                section_count += 1
-                
-                # Create Link
-                redis_key = f"pharma:drug:{found_drug_id}:sections"
-                pipeline.sadd(redis_key, entity_id)
-                link_count += 1
+            # Create links to sections
+            if entity_id in relationship_targets:
+                for section_id in relationship_targets[entity_id]:
+                    pipeline.sadd(f"pharma:drug:{entity_id}:sections", section_id)
+                    link_count += 1
 
-        if (i + 1) % 5000 == 0:
+        # Store Section
+        elif entity_id in potential_section_ids:
+            pipeline.hset("pharma:entities", entity_id, json.dumps(entity))
+            pipeline.sadd("pharma:sections", entity_id)
+            section_count += 1
+
+        if (i + 1) % 10000 == 0:
             pipeline.execute()
             pipeline = redis_client.pipeline()
-            print(f"Phase 2 Processed {i+1}/{total_entities}... Drugs: {drug_count}, Sections: {section_count}")
+            print(f"Phase 2 Processed {i+1}/{len(entity_map)}... Drugs: {drug_count}, Sections: {section_count}")
 
     pipeline.execute()
     
@@ -307,69 +300,95 @@ def load_data_to_redis():
     build_memory_index()
     return True
 
-# --- App Setup ---
-app = FastAPI(title="Pharma Knowledge Graph API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# Startup Event
 @app.on_event("startup")
 async def startup_event():
+    """Load data on startup"""
+    print("Starting Pharmaceutical Knowledge Graph API...")
     load_data_to_redis()
+    print("API Ready!")
 
-# --- Endpoints ---
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "redis": "connected" if redis_client else "disconnected"}
+# API Endpoints
 
-@app.get("/api/search/suggestions", response_model=SuggestionResponse)
-async def get_suggestions(q: str):
+@app.get("/")
+async def root():
+    """Root endpoint with API info"""
+    return {
+        "name": "Pharmaceutical Knowledge Graph API",
+        "version": "1.0.0",
+        "status": "operational",
+        "endpoints": {
+            "search": "/api/search/suggestions?q={query}",
+            "drug": "/drug/{drug_id}",
+            "section": "/section/{section_id}",
+            "stats": "/api/stats"
+        }
+    }
+
+
+@app.get("/api/stats", response_model=StatsResponse)
+async def get_stats():
+    """Get database statistics"""
     if not redis_client:
         raise HTTPException(status_code=500, detail="Redis not available")
     
-    q = q.lower().strip()
+    total_drugs = redis_client.scard("pharma:drugs")
+    total_sections = redis_client.scard("pharma:sections")
+    
+    # Count links
+    total_links = 0
+    for key in redis_client.scan_iter("pharma:drug:*:sections"):
+        total_links += redis_client.scard(key)
+    
+    return StatsResponse(
+        total_drugs=total_drugs,
+        total_sections=total_sections,
+        total_links=total_links,
+        enhanced_matched=redis_client.hlen("pharma:enhanced_drugs"),
+        search_index_size=len(DRUG_SEARCH_INDEX)
+    )
+
+
+@app.get("/api/search/suggestions")
+async def search_suggestions(q: str = Query(..., min_length=2)):
+    """Get search suggestions for drug names"""
+    q_lower = q.lower()
     suggestions = []
     
     for name, data in DRUG_SEARCH_INDEX.items():
-        if name.startswith(q):
-            suggestions.append(data)
+        if q_lower in name:
+            suggestions.append({
+                "id": data["id"],
+                "name": data["name"],
+                "set_id": data["set_id"]
+            })
             if len(suggestions) >= 10:
                 break
-                
+    
     return {"suggestions": suggestions}
 
-@app.get("/drug/{entity_id}", response_model=DrugResponse)
-async def get_drug_details(entity_id: str):
+
+@app.get("/drug/{drug_id}", response_model=DrugDetail)
+async def get_drug_details(drug_id: str):
+    """Get full details for a drug including all sections"""
     if not redis_client:
         raise HTTPException(status_code=500, detail="Redis not available")
     
-    # 1. Get Drug Info
-    drug_data_raw = redis_client.hget("pharma:enhanced_drugs", entity_id)
+    # Get enhanced drug data
+    drug_data = redis_client.hget("pharma:enhanced_drugs", drug_id)
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
     
-    if not drug_data_raw:
-         raise HTTPException(status_code=404, detail="Drug not found")
+    drug = json.loads(drug_data)
     
-    drug_info = json.loads(drug_data_raw)
-    drug_name = drug_info.get('name', '')
-    set_id = drug_info.get('set_id', '')
+    # Get section IDs
+    section_ids = redis_client.smembers(f"pharma:drug:{drug_id}:sections")
     
-    # DEBUG PRINT
-    print(f"--- DEBUG: Fetching sections for Drug: '{drug_name}' (Entity: {entity_id})")
-    
-    # 2. Get Sections (KEY FIX: Use entity_id, not drug_name)
+    # Get section summaries
     sections = []
-    redis_key = f"pharma:drug:{entity_id}:sections"
-    section_ids = redis_client.smembers(redis_key)
-    print(f"--- DEBUG: Found {len(section_ids)} section IDs")
-
-    for section_id in section_ids:
-        section_raw = redis_client.hget("pharma:entities", section_id)
+    for sid in section_ids:
+        section_raw = redis_client.hget("pharma:entities", sid)
         if section_raw:
             section_entity = json.loads(section_raw)
             
@@ -380,61 +399,123 @@ async def get_drug_details(entity_id: str):
                 val = triple.get('value', {})
                 section_attrs[attr] = val.get('value', '') if isinstance(val, dict) else str(val)
             
-            # Get content preview
-            content_preview = section_attrs.get(ATTRIBUTES.get('content'), '')
-            if not content_preview:
-                 all_vals = list(section_attrs.values())
-                 if all_vals:
-                     content_preview = max(all_vals, key=len)
-
-            # Get section type for sorting
-            section_type = section_attrs.get(ATTRIBUTES.get('section_type'), 'UNKNOWN')
+            # Find title (shortest meaningful value)
+            title = "Unknown"
+            for v in section_attrs.values():
+                if v and 5 < len(str(v)) < 100 and not uuid_pattern.match(str(v)):
+                    title = str(v)
+                    break
             
-            sections.append({
-                "section_type": section_type,
-                "title": section_attrs.get(ATTRIBUTES.get('name'), 'No Title'),
-                "content_preview": str(content_preview)[:200],
-                "provenance_hash": section_attrs.get(ATTRIBUTES.get('provenance_hash'), section_id)[:16],
-                "section_id": section_id,
-                "sort_order": SECTION_ORDER.get(section_type, 99)
-            })
-
-    # Sort sections by FDA standard order
-    sections.sort(key=lambda x: x['sort_order'])
+            # Find content preview
+            content_preview = ""
+            content_values = [v for v in section_attrs.values() if v and len(str(v)) > 100]
+            if content_values:
+                content_preview = str(max(content_values, key=len))[:200] + "..."
+            
+            # Determine section type from title
+            section_type = "UNKNOWN"
+            title_lower = title.lower()
+            section_keywords = {
+                'indications': 'INDICATIONS_AND_USAGE',
+                'dosage': 'DOSAGE_AND_ADMINISTRATION',
+                'contraindications': 'CONTRAINDICATIONS',
+                'warnings': 'WARNINGS_AND_PRECAUTIONS',
+                'adverse': 'ADVERSE_REACTIONS',
+                'interactions': 'DRUG_INTERACTIONS',
+                'pregnancy': 'USE_IN_SPECIFIC_POPULATIONS',
+                'pediatric': 'USE_IN_SPECIFIC_POPULATIONS',
+                'geriatric': 'USE_IN_SPECIFIC_POPULATIONS',
+                'overdosage': 'OVERDOSAGE',
+                'description': 'DESCRIPTION',
+                'clinical pharmacology': 'CLINICAL_PHARMACOLOGY',
+                'mechanism': 'CLINICAL_PHARMACOLOGY',
+                'pharmacokinetics': 'CLINICAL_PHARMACOLOGY',
+                'nonclinical': 'NONCLINICAL_TOXICOLOGY',
+                'carcinogenesis': 'NONCLINICAL_TOXICOLOGY',
+                'clinical studies': 'CLINICAL_STUDIES',
+                'supplied': 'HOW_SUPPLIED',
+                'patient counseling': 'PATIENT_COUNSELING_INFORMATION',
+                'boxed': 'BOXED_WARNING',
+                'warning:': 'BOXED_WARNING'
+            }
+            
+            for keyword, stype in section_keywords.items():
+                if keyword in title_lower:
+                    section_type = stype
+                    break
+            
+            sections.append(SectionSummary(
+                section_id=sid,
+                section_type=section_type,
+                title=title,
+                content_preview=content_preview
+            ))
     
-    # 3. Prepare Metadata (Human Readable)
-    # Fetch full entity to get all attributes for metadata display
-    entity_raw = redis_client.hget("pharma:entities", entity_id)
-    drug_attrs = {}
-    if entity_raw:
-        drug_entity = json.loads(entity_raw)
-        for triple in drug_entity.get('triples', []):
-            attr = triple.get('attribute', '')
-            val = triple.get('value', {})
-            drug_attrs[attr] = val.get('value', '') if isinstance(val, dict) else str(val)
-
-    readable_metadata = {}
-    for key, value in drug_attrs.items():
-        readable_key = ID_TO_NAME.get(key, key)
-        readable_value = VALUE_MAP.get(value, value)
-        if readable_key == 'type' and readable_value == 'Drug Entity':
-            continue
-        readable_metadata[readable_key] = readable_value
-
-    # Add Enriched Data
-    readable_metadata['NDA/ANDA'] = drug_info.get('nda', 'N/A')
-    readable_metadata['NDC Codes'] = drug_info.get('ndc', 'N/A')
-    readable_metadata['Manufacturer'] = drug_info.get('manufacturer', 'Unknown')
-    readable_metadata['AMA Citation'] = drug_info.get('ama_citation', 'N/A')
-
-    return DrugResponse(
-        status="found",
-        drug_name=drug_name,
-        set_id=set_id,
-        total_sections=len(sections),
-        sections=[DrugSection(**s) for s in sections],
-        metadata=readable_metadata
+    # Sort sections
+    def section_sort_key(s):
+        type_order = {
+            'BOXED_WARNING': 0,
+            'INDICATIONS_AND_USAGE': 1,
+            'DOSAGE_AND_ADMINISTRATION': 2,
+            'DOSAGE_FORMS_AND_STRENGTHS': 3,
+            'CONTRAINDICATIONS': 4,
+            'WARNINGS_AND_PRECAUTIONS': 5,
+            'ADVERSE_REACTIONS': 6,
+            'DRUG_INTERACTIONS': 7,
+            'USE_IN_SPECIFIC_POPULATIONS': 8,
+            'OVERDOSAGE': 9,
+            'DESCRIPTION': 10,
+            'CLINICAL_PHARMACOLOGY': 11,
+            'NONCLINICAL_TOXICOLOGY': 12,
+            'CLINICAL_STUDIES': 13,
+            'HOW_SUPPLIED': 14,
+            'PATIENT_COUNSELING_INFORMATION': 15
+        }
+        return type_order.get(s.section_type, 99)
+    
+    sections.sort(key=section_sort_key)
+    
+    return DrugDetail(
+        drug_id=drug_id,
+        name=drug.get('name', 'Unknown').title(),
+        set_id=drug.get('set_id', 'N/A'),
+        nda=drug.get('nda', 'N/A'),
+        ndc=drug.get('ndc', 'N/A'),
+        manufacturer=drug.get('manufacturer', 'Unknown'),
+        ama_citation=drug.get('ama_citation', 'N/A'),
+        sections=sections,
+        section_count=len(sections)
     )
+
+
+@app.get("/debug/section/{section_id}")
+async def debug_section(section_id: str):
+    """Debug endpoint to see raw section attributes"""
+    if not redis_client:
+        raise HTTPException(status_code=500, detail="Redis not available")
+    
+    section_raw = redis_client.hget("pharma:entities", section_id)
+    if not section_raw:
+        raise HTTPException(status_code=404, detail="Section not found")
+    
+    section_entity = json.loads(section_raw)
+    
+    # Extract all attributes with their IDs
+    attrs = {}
+    for triple in section_entity.get('triples', []):
+        attr = triple.get('attribute', 'unknown')
+        val = triple.get('value', {})
+        if isinstance(val, dict):
+            attrs[attr] = val.get('value', '')
+        else:
+            attrs[attr] = str(val)
+    
+    return {
+        "section_id": section_id,
+        "attributes": attrs,
+        "raw_triples": section_entity.get('triples', [])
+    }
+
 
 @app.get("/section/{section_id}", response_model=SectionDetail)
 async def get_section_details(section_id: str):
@@ -448,63 +529,91 @@ async def get_section_details(section_id: str):
     
     section_entity = json.loads(section_raw)
     
-    # 1. Extract all attributes first
+    # Extract all attributes
     section_attrs = {}
     for triple in section_entity.get('triples', []):
         attr = triple.get('attribute', '')
         val = triple.get('value', {})
         section_attrs[attr] = val.get('value', '') if isinstance(val, dict) else str(val)
 
-    # 2. SMART CONTENT DETECTION
-    # Find the longest value in the attributes (this is usually the main content)
+    # Find content (longest value)
     content = "No content available"
-    if section_attrs:
-        # Filter out empty strings just in case
-        valid_values = [v for v in section_attrs.values() if v]
-        if valid_values:
-            content = max(valid_values, key=len)
+    content_values = [v for v in section_attrs.values() if v and len(str(v)) > 100]
+    if content_values:
+        content = max(content_values, key=len)
 
-    # 3. SMART TITLE DETECTION
-    title = section_attrs.get(ATTRIBUTES.get('name'), '')
-    if not title:
-        # Fallback: Find a short string that isn't the content
-        for v in section_attrs.values():
-            if len(v) < 100 and len(v) > 0 and v != content:
-                title = v
+    # Find title (shortest meaningful value that isn't an ID)
+    title = "Unknown Title"
+    title_candidates = [v for v in section_attrs.values() if v and 5 < len(str(v)) < 100]
+    if title_candidates:
+        for v in title_candidates:
+            if not uuid_pattern.match(str(v)) and not str(v).isdigit():
+                title = str(v)
                 break
+
+    # Determine section type from title
+    section_type = "UNKNOWN"
+    title_lower = title.lower()
+    section_keywords = {
+        'indications': 'INDICATIONS_AND_USAGE',
+        'dosage': 'DOSAGE_AND_ADMINISTRATION',
+        'contraindications': 'CONTRAINDICATIONS',
+        'warnings': 'WARNINGS_AND_PRECAUTIONS',
+        'adverse': 'ADVERSE_REACTIONS',
+        'interactions': 'DRUG_INTERACTIONS',
+        'pregnancy': 'USE_IN_SPECIFIC_POPULATIONS',
+        'pediatric': 'USE_IN_SPECIFIC_POPULATIONS',
+        'geriatric': 'USE_IN_SPECIFIC_POPULATIONS',
+        'overdosage': 'OVERDOSAGE',
+        'description': 'DESCRIPTION',
+        'clinical pharmacology': 'CLINICAL_PHARMACOLOGY',
+        'mechanism': 'CLINICAL_PHARMACOLOGY',
+        'pharmacokinetics': 'CLINICAL_PHARMACOLOGY',
+        'nonclinical': 'NONCLINICAL_TOXICOLOGY',
+        'carcinogenesis': 'NONCLINICAL_TOXICOLOGY',
+        'clinical studies': 'CLINICAL_STUDIES',
+        'supplied': 'HOW_SUPPLIED',
+        'patient counseling': 'PATIENT_COUNSELING_INFORMATION',
+        'boxed': 'BOXED_WARNING',
+        'warning:': 'BOXED_WARNING'
+    }
     
-    if not title:
-        title = "Unknown Title"
-        
-    # 4. Get Provenance Hash
-    prov_hash = section_attrs.get(ATTRIBUTES.get('provenance_hash'), section_attrs.get('WQfdWjboZWFuTseDhG5Cw1', section_id))
+    for keyword, stype in section_keywords.items():
+        if keyword in title_lower:
+            section_type = stype
+            break
+
+    # Get provenance hash
+    prov_hash = section_id[:16]
+    for attr_id, val in section_attrs.items():
+        if isinstance(val, str) and uuid_pattern.match(val) and val != section_id:
+            prov_hash = val[:16]
+            break
 
     return SectionDetail(
         section_id=section_id,
-        section_type=section_attrs.get(ATTRIBUTES.get('section_type'), 'UNKNOWN'),
+        section_type=section_type,
         title=title,
         content=content,
         provenance=ProvenanceData(
             fda_document_id=section_id,
             drug_name="",
-            set_id=section_attrs.get(ATTRIBUTES.get('fda_set_id'), 'N/A'),
-            section_type=section_attrs.get(ATTRIBUTES.get('section_type'), 'UNKNOWN'),
+            set_id="",
+            section_type=section_type,
             title=title,
             citation=f"Hash: {prov_hash}",
             type="section"
         )
     )
 
-@app.get("/stats")
-async def get_stats():
-    if not redis_client:
-        raise HTTPException(status_code=500, detail="Redis not available")
-    
-    return {
-        "drug_count": redis_client.get("pharma:stats:drug_count") or 0,
-        "section_count": redis_client.get("pharma:stats:section_count") or 0,
-        "index_size": len(DRUG_SEARCH_INDEX)
-    }
+
+# Health Check
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "redis": "connected" if redis_client else "disconnected"}
+
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
