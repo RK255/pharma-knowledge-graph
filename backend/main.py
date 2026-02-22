@@ -37,7 +37,7 @@ app.add_middleware(
 )
 
 # Global Search Index (in-memory for performance)
-DRUG_SEARCH_INDEX: Dict[str, Dict[str, str]] = {}
+DRUG_SEARCH_INDEX: Dict[str, List[Dict[str, str]]] = {}
 
 # UUID Pattern for Set ID detection
 uuid_pattern = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
@@ -88,36 +88,44 @@ class StatsResponse(BaseModel):
     enhanced_matched: int
     search_index_size: int
 
-
 def build_memory_index():
-    """Build in-memory search index from Redis"""
+    """Build in-memory search index from Redis - groups drugs by name"""
     global DRUG_SEARCH_INDEX
     DRUG_SEARCH_INDEX = {}
     if not redis_client:
         return
     
     print("Building in-memory search index...")
-    count = 0
+    
     for entity_id, data_str in redis_client.hscan_iter("pharma:enhanced_drugs"):
         try:
             data = json.loads(data_str)
-            name = data.get('name')
+            name = data.get('name', '').lower().strip()
             if name:
+                # Group by drug name
                 if name not in DRUG_SEARCH_INDEX:
-                    DRUG_SEARCH_INDEX[name] = {
-                        "id": entity_id,
-                        "name": name.title(),
-                        "set_id": data.get('set_id', '')
-                    }
-                    count += 1
+                    DRUG_SEARCH_INDEX[name] = []
+                
+                DRUG_SEARCH_INDEX[name].append({
+                    "id": entity_id,
+                    "name": name.title(),
+                    "set_id": data.get('set_id', ''),
+                    "manufacturer": data.get('manufacturer', 'Unknown'),
+                    "nda": data.get('nda', 'N/A')
+                })
         except Exception as e:
             print(f"Error indexing {entity_id}: {e}")
             continue
-            
-    print(f"✅ Search index built with {count} drugs")
+    
+    # Sort each group by manufacturer
+    for name in DRUG_SEARCH_INDEX:
+        DRUG_SEARCH_INDEX[name].sort(key=lambda x: x.get('manufacturer', ''))
+    
+    total_variants = sum(len(v) for v in DRUG_SEARCH_INDEX.values())
+    print(f"✅ Search index built: {len(DRUG_SEARCH_INDEX)} unique drugs, {total_variants} total variants")
 
 def load_data_to_redis():
-    """Load GRC-20 data into Redis with proper Drug/Section/Relationship handling"""
+    """Load GRC-20 data into Redis - Memory Efficient Version"""
     global DRUG_SEARCH_INDEX
     
     if not redis_client:
@@ -165,30 +173,17 @@ def load_data_to_redis():
     total_entities = len(entities)
     print(f"Processing {total_entities} entities...")
 
-    # PHASE 1: Build ID Maps
-    print("Phase 1: Building ID maps...")
+    # PHASE 1: IDENTIFY IDS (Pass 1 - Read Only, NO entity_map)
+    print("Phase 1: Identifying IDs...")
     
-    # Map entity_id -> entity for fast lookup
-    entity_map = {}
-    
-    # Identify Drugs (entities with UUID Set ID)
     all_drug_ids = set()
-    
-    # Identify Relationship entities and their targets
-    relationship_targets = {}  # drug_id -> [section_ids]
-    
-    # Identify potential sections (entities that are targets of relationships)
-    potential_section_ids = set()
-    
+    relationship_links = {}  # drug_id -> [section_ids]
     name_attr_id = None
     
     for i, entity in enumerate(entities):
         entity_id = entity.get('id')
         if not entity_id: continue
         
-        entity_map[entity_id] = entity
-        
-        # Extract attributes
         attrs = {}
         for triple in entity.get('triples', []):
             attr = triple.get('attribute')
@@ -198,34 +193,34 @@ def load_data_to_redis():
             
             if not name_attr_id and isinstance(val, str) and len(val) > 0 and len(val) < 100:
                 name_attr_id = attr
-        
-        # Check if this is a Drug (has UUID)
+
+        # Check if Drug (has UUID Set ID)
         for v in attrs.values():
             if isinstance(v, str) and uuid_pattern.match(v):
                 all_drug_ids.add(entity_id)
                 break
         
-        # Check if this is a Relationship entity
+        # Check if Relationship
         source = attrs.get('source')
         target = attrs.get('target')
         rel_type = attrs.get('relationship_type')
         
-        if source and target and rel_type:
-            # This is a relationship entity
-            if rel_type == 'has_section' or 'section' in rel_type.lower():
-                if source in all_drug_ids or target in all_drug_ids:
-                    # The target is a section, the source is a drug
-                    potential_section_ids.add(target)
-                    if source not in relationship_targets:
-                        relationship_targets[source] = []
-                    relationship_targets[source].append(target)
+        if source and target and rel_type and 'section' in rel_type.lower():
+            if source not in relationship_links:
+                relationship_links[source] = []
+            relationship_links[source].append(target)
 
         if (i + 1) % 100000 == 0:
-            print(f"Phase 1 Scanned {i+1}/{total_entities}... (Drugs: {len(all_drug_ids)}, Sections: {len(potential_section_ids)})")
+            print(f"Phase 1 Scanned {i+1}/{total_entities}... (Drugs: {len(all_drug_ids)})")
 
-    print(f"Phase 1 Complete. Found {len(all_drug_ids)} Drugs, {len(potential_section_ids)} Sections")
+    # Build Section IDs set from relationships
+    all_section_ids = set()
+    for section_list in relationship_links.values():
+        all_section_ids.update(section_list)
+    
+    print(f"Phase 1 Complete. Found {len(all_drug_ids)} Drugs, {len(all_section_ids)} Sections")
 
-    # PHASE 2: Store Everything
+    # PHASE 2: STORE ENTITIES (Pass 2 - Same as original)
     print("Phase 2: Storing entities...")
     
     pipeline = redis_client.pipeline()
@@ -235,7 +230,11 @@ def load_data_to_redis():
     matched_count = 0
     missed_count = 0
     
-    for i, (entity_id, entity) in enumerate(entity_map.items()):
+    for i, entity in enumerate(entities):
+        entity_id = entity.get('id')
+        if not entity_id: continue
+        
+        # Extract attrs
         attrs = {}
         for triple in entity.get('triples', []):
             attr = triple.get('attribute')
@@ -271,22 +270,22 @@ def load_data_to_redis():
                 "manufacturer": extra.get('manufacturer', 'Unknown')
             }))
             
-            # Create links to sections
-            if entity_id in relationship_targets:
-                for section_id in relationship_targets[entity_id]:
+            # Create links from relationships
+            if entity_id in relationship_links:
+                for section_id in relationship_links[entity_id]:
                     pipeline.sadd(f"pharma:drug:{entity_id}:sections", section_id)
                     link_count += 1
 
         # Store Section
-        elif entity_id in potential_section_ids:
+        elif entity_id in all_section_ids:
             pipeline.hset("pharma:entities", entity_id, json.dumps(entity))
             pipeline.sadd("pharma:sections", entity_id)
             section_count += 1
 
-        if (i + 1) % 10000 == 0:
+        if (i + 1) % 5000 == 0:
             pipeline.execute()
             pipeline = redis_client.pipeline()
-            print(f"Phase 2 Processed {i+1}/{len(entity_map)}... Drugs: {drug_count}, Sections: {section_count}")
+            print(f"Phase 2 Processed {i+1}/{total_entities}... Drugs: {drug_count}, Sections: {section_count}")
 
     pipeline.execute()
     
@@ -352,22 +351,49 @@ async def get_stats():
 
 @app.get("/api/search/suggestions")
 async def search_suggestions(q: str = Query(..., min_length=2)):
-    """Get search suggestions for drug names"""
+    """Get search suggestions for drug names (grouped)"""
     q_lower = q.lower()
     suggestions = []
     
-    for name, data in DRUG_SEARCH_INDEX.items():
+    for name, variants in DRUG_SEARCH_INDEX.items():
         if q_lower in name:
             suggestions.append({
-                "id": data["id"],
-                "name": data["name"],
-                "set_id": data["set_id"]
+                "name": name.title(),
+                "variant_count": len(variants),
+                "top_manufacturer": variants[0].get('manufacturer', 'Unknown') if variants else 'Unknown'
             })
-            if len(suggestions) >= 10:
+            if len(suggestions) >= 15:
                 break
     
     return {"suggestions": suggestions}
 
+@app.get("/api/drug-variants/{drug_name}")
+async def get_drug_variants(drug_name: str):
+    """Get all manufacturer variants for a drug name"""
+    if not redis_client:
+        raise HTTPException(status_code=500, detail="Redis not available")
+    
+    drug_name_lower = drug_name.lower().strip()
+    
+    if drug_name_lower not in DRUG_SEARCH_INDEX:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    variants = DRUG_SEARCH_INDEX[drug_name_lower]
+    
+    # Add section count to each variant
+    enriched_variants = []
+    for v in variants:
+        section_count = redis_client.scard(f"pharma:drug:{v['id']}:sections")
+        enriched_variants.append({
+            **v,
+            "section_count": section_count
+        })
+    
+    return {
+        "drug_name": drug_name.title(),
+        "total_variants": len(enriched_variants),
+        "variants": enriched_variants
+    }
 
 @app.get("/drug/{drug_id}", response_model=DrugDetail)
 async def get_drug_details(drug_id: str):

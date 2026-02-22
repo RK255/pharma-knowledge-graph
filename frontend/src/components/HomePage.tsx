@@ -1,133 +1,67 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Box,
-  Container,
-  Typography,
-  Button,
-  Card,
-  CardContent,
-  CircularProgress,
-  Alert
-} from '@mui/material';
-import { Search as SearchIcon } from '@mui/icons-material';
-import { api } from '../services/api';
-import { HealthResponse } from '../types/api';
+// src/components/HomePage.tsx
+import React from 'react';
 
-const HomePage: React.FC = () => {
-  const [stats, setStats] = useState<HealthResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
+interface HomePageProps {
+  children: React.ReactNode;
+}
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const data = await api.getHealth();
-        setStats(data);
-      } catch (err) {
-        setError('Failed to load statistics');
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchStats();
-  }, []);
-
-  const handleSearchClick = () => {
-    navigate('/search');
-  };
-
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  if (error) {
-    return (
-      <Alert severity="error">
-        {error}
-      </Alert>
-    );
-  }
-
+export const HomePage: React.FC<HomePageProps> = ({ children }) => {
   return (
-    <Container maxWidth="lg">
-      <Box sx={{ my: 4 }}>
-        <Typography variant="h3" component="h1" gutterBottom align="center">
-          Pharmaceutical Knowledge Graph
-        </Typography>
-        <Typography variant="h5" component="h2" gutterBottom align="center" color="text.secondary">
-          FDA Regulatory Data with Complete Provenance Tracking
-        </Typography>
-        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
-          <Button
-            variant="contained"
-            size="large"
-            startIcon={<SearchIcon />}
-            onClick={handleSearchClick}
-          >
-            Search Drugs
-          </Button>
-        </Box>
-      </Box>
+    <div className="space-y-8">
+      {/* Stats Section */}
+      <div className="bg-white rounded-xl shadow-sm p-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="text-center">
+            <div className="text-3xl font-bold text-blue-600">51K+</div>
+            <div className="text-sm text-gray-500 mt-1">Package Inserts</div>
+          </div>
+          <div className="text-center">
+            <div className="text-3xl font-bold text-green-600">1M+</div>
+            <div className="text-sm text-gray-500 mt-1">Sections</div>
+          </div>
+          <div className="text-center">
+            <div className="text-3xl font-bold text-purple-600">100%</div>
+            <div className="text-sm text-gray-500 mt-1">Provenance</div>
+          </div>
+          <div className="text-center">
+            <div className="text-3xl font-bold text-orange-600">FDA</div>
+            <div className="text-sm text-gray-500 mt-1">SPL Data</div>
+          </div>
+        </div>
+      </div>
 
-      {stats && (
-        <Box sx={{ my: 4 }}>
-          <Typography variant="h4" component="h2" gutterBottom>
-            System Overview
-          </Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
-            <Card sx={{ flex: '1 1 200px' }}>
-              <CardContent>
-                <Typography variant="h6" component="div">
-                  {stats.indexed_drugs.toLocaleString()}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Indexed Drugs
-                </Typography>
-              </CardContent>
-            </Card>
-            <Card sx={{ flex: '1 1 200px' }}>
-              <CardContent>
-                <Typography variant="h6" component="div">
-                  {stats.provenance_entries.toLocaleString()}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Provenance Entries
-                </Typography>
-              </CardContent>
-            </Card>
-            <Card sx={{ flex: '1 1 200px' }}>
-              <CardContent>
-                <Typography variant="h6" component="div">
-                  {stats.version}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  API Version
-                </Typography>
-              </CardContent>
-            </Card>
-            <Card sx={{ flex: '1 1 200px' }}>
-              <CardContent>
-                <Typography variant="h6" component="div">
-                  {stats.status}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  System Status
-                </Typography>
-              </CardContent>
-            </Card>
-          </Box>
-        </Box>
-      )}
-    </Container>
+      {/* Search Section */}
+      <div className="bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl shadow-lg p-8">
+        <h2 className="text-2xl font-bold text-white text-center mb-6">
+          Search FDA Drug Information
+        </h2>
+        {children}
+      </div>
+
+      {/* Info Section */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <div className="text-blue-500 text-2xl mb-3">📋</div>
+          <h3 className="font-semibold text-gray-900 mb-2">Complete Package Inserts</h3>
+          <p className="text-sm text-gray-600">
+            Access full FDA-approved labeling including indications, dosage, contraindications, and more.
+          </p>
+        </div>
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <div className="text-green-500 text-2xl mb-3">🔍</div>
+          <h3 className="font-semibold text-gray-900 mb-2">Full Provenance Tracking</h3>
+          <p className="text-sm text-gray-600">
+            Every piece of data is traceable to its source FDA document with set IDs and citations.
+          </p>
+        </div>
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <div className="text-purple-500 text-2xl mb-3">🏭</div>
+          <h3 className="font-semibold text-gray-900 mb-2">Multiple Manufacturers</h3>
+          <p className="text-sm text-gray-600">
+            Compare labeling across different manufacturers for the same drug.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 };
-
-export default HomePage;

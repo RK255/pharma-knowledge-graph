@@ -1,68 +1,64 @@
+// src/App.tsx
 import React, { useState } from 'react';
 import { DrugSearch } from './components/DrugSearch';
 import { DrugDetail } from './components/DrugDetail';
+import { HomePage } from './components/HomePage';
 
 function App() {
   const [selectedDrugId, setSelectedDrugId] = useState<string | null>(null);
-  const [selectedDrugName, setSelectedDrugName] = useState<string>("");
+  const [selectedDrugName, setSelectedDrugName] = useState<string>('');
 
-  const handleDrugSelect = (entityId: string, name: string) => {
-    setSelectedDrugId(entityId);
-    setSelectedDrugName(name);
+  const handleDrugSelect = (drugId: string, drugName: string) => {
+    setSelectedDrugId(drugId);
+    setSelectedDrugName(drugName);
   };
 
   const handleBack = () => {
     setSelectedDrugId(null);
+    setSelectedDrugName('');
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-100">
+      {/* Header */}
       <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-6">
+        <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              {selectedDrugId && (
-                <button 
-                  onClick={handleBack}
-                  className="text-blue-600 hover:text-blue-800 flex items-center"
-                >
-                  <svg className="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                  Back to Search
-                </button>
-              )}
-              <h1 className="text-2xl font-bold text-gray-900">
-                Pharma Knowledge Graph
-              </h1>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Pharmaceutical Knowledge Graph</h1>
+              <p className="text-sm text-gray-500 mt-1">FDA Drug Package Inserts with Full Provenance</p>
             </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-500">
-                FDA SPL Data with Provenance
-              </span>
-            </div>
+            {selectedDrugId && (
+              <button
+                onClick={handleBack}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+              >
+                ← Back to Search
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
         {!selectedDrugId ? (
-          <div className="flex flex-col items-center justify-center py-12">
-            <h2 className="text-4xl font-bold text-gray-800 mb-4 text-center">
-              Search FDA Drug Labels
-            </h2>
-            <p className="text-gray-600 mb-8 text-center max-w-2xl">
-              Access comprehensive pharmaceutical data with full provenance tracking. 
-              Search for any FDA approved drug to view detailed prescribing information.
-            </p>
-            <div className="w-full max-w-2xl">
-              <DrugSearch onSelect={(id, name) => handleDrugSelect(id, name)} />
-            </div>
-          </div>
+          <HomePage>
+            <DrugSearch onDrugSelect={handleDrugSelect} />
+          </HomePage>
         ) : (
           <DrugDetail drugId={selectedDrugId} drugName={selectedDrugName} />
         )}
       </main>
+
+      {/* Footer */}
+      <footer className="bg-white border-t border-gray-200 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
+          <p className="text-center text-sm text-gray-500">
+            Data sourced from FDA Structured Product Labeling (SPL) • Built with Redis + FastAPI + React
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }
