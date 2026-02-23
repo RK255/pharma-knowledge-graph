@@ -28,7 +28,7 @@ PUBCHEM_DIR = f"{RAW_DATA_DIR}/pubchem"
 LEDGER_FILE = f"{BASE_DIR}/data/provenance/Granular_Provenance_Ledger.json"
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "BowserNodes"  # Replace with your actual password
+NEO4J_PASSWORD = "Nani*48301"  # Replace with your actual password
 
 # PubChem FTP details
 FTP_HOST = "ftp.ncbi.nlm.nih.gov"

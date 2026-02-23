@@ -14,7 +14,7 @@ LEDGER_FILE = f"{BASE_DIR}/data/provenance/Granular_Provenance_Ledger.json"
 TTY_REFERENCE_FILE = f"{BASE_DIR}/data/tty/Tty_Reference.json"
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "BowserNodes"
+NEO4J_PASSWORD = "Nani*48301"
 
 # Define primary TTYs (non-synonym types)
 PRIMARY_TTYS = {
