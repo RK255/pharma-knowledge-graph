@@ -125,6 +125,9 @@ class ParallelLoader:
         # Step 6: Create cross-links
         self._create_cross_links_parallel()
         
+        # Step 6.5: Classify NDC-RxNorm confidence
+        self._classify_ndc_confidence()
+        
         # Step 7: Verify
         self._verify()
         
@@ -443,6 +446,81 @@ class ParallelLoader:
     # STEP 7: Verify
     # -------------------------------------------------------------------------
     
+
+    def _classify_ndc_confidence(self):
+        """
+        Classify MAPS_TO_RXCUI relationships by confidence level.
+        
+        HIGH: FDA drug name contains at least one RxNorm ingredient
+        LOW: FDA name contains NONE of the RxNorm ingredients (conflict)
+        """
+        print(f"\n[6.5/7] Classifying NDC-RxNorm confidence...")
+        
+        with self._get_session() as session:
+            result = session.run("""
+                MATCH ()-[r:MAPS_TO_RXCUI]->()
+                WHERE r.confidence IS NULL
+                RETURN count(r) as total
+            """)
+            total = result.single()["total"]
+            
+            if total == 0:
+                print("  All relationships already classified")
+                return
+            
+            print(f"  Classifying {total:,} relationships...")
+            
+            start = time.time()
+            classified = 0
+            
+            while True:
+                result = session.run("""
+                    MATCH (fda:Entity)-[:HAS_NDC]->(ndc:Entity)-[r:MAPS_TO_RXCUI]->(cd:ClinicalDrug)
+                    WHERE fda.fda_set_id IS NOT NULL AND ndc.is_rxnorm = true AND r.confidence IS NULL
+                    OPTIONAL MATCH (cd)-[:CONSTITUTES]->(scc)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+                    WITH fda, ndc, cd, r, 
+                         toLower(fda.name) as fda_lower,
+                         collect(DISTINCT toLower(ing.name)) as ingredients
+                    WITH fda, ndc, cd, r, fda_lower, ingredients,
+                         ANY(ing_name IN ingredients WHERE fda_lower CONTAINS ing_name) as has_match
+                    LIMIT 5000
+                    SET r.confidence = CASE WHEN has_match THEN 'HIGH' ELSE 'LOW' END,
+                        r.conflict_reason = CASE 
+                            WHEN has_match THEN 'FDA-RxNorm agreement verified'
+                            ELSE 'FDA-RxNorm mismatch: drug name does not match any RxNorm ingredients'
+                        END,
+                        r.authoritative_source = CASE 
+                            WHEN has_match THEN 'FDA+RxNorm'
+                            ELSE 'RxNorm'
+                        END,
+                        r.classified_at = datetime()
+                    RETURN count(r) as batch_count
+                """)
+                
+                batch_count = result.single()["batch_count"]
+                if batch_count == 0:
+                    break
+                    
+                classified += batch_count
+                if classified % 20000 == 0:
+                    print(f"    {classified:,}/{total:,}")
+            
+            elapsed = time.time() - start
+            print(f"  ✅ Classified {classified:,} relationships in {elapsed:.1f}s")
+            
+            result = session.run("""
+                MATCH ()-[r:MAPS_TO_RXCUI]->()
+                RETURN count(r) as total,
+                       count(CASE WHEN r.confidence = 'HIGH' THEN 1 END) as high,
+                       count(CASE WHEN r.confidence = 'LOW' THEN 1 END) as low
+            """)
+            stats = result.single()
+            print(f"     HIGH confidence: {stats['high']:,} ({100*stats['high']/stats['total']:.1f}%)")
+            print(f"     LOW confidence:  {stats['low']:,} ({100*stats['low']/stats['total']:.1f}%)")
+            
+            self.stats["high_confidence"] = stats['high']
+            self.stats["low_confidence"] = stats['low']
+
     def _verify(self):
         print("\n[7/7] Verification...")
         
