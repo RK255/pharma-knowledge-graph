@@ -97,6 +97,43 @@ TOOLS = [
         },
         endpoint="/api/drug/{drug_id}/ingredients"
     ),
+    ToolDefinition(
+        name="get_drug_classes",
+        description="Get all pharmacological classes a drug belongs to. Use to understand drug mechanism and find similar drugs by class. Returns classes grouped by ingredient.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "drug_id": {"type": "string", "description": "The unique drug ID from search_drugs"}
+            },
+            "required": ["drug_id"]
+        },
+        endpoint="/api/drug/{drug_id}/classes"
+    ),
+    ToolDefinition(
+        name="get_drugs_in_class",
+        description="Find all drugs/ingredients that belong to a pharmacological class. Use when asked about drug classes, alternatives by mechanism, or drugs with similar effects. Class examples: 'Anti-Bacterial Agents', 'Antihypertensive Agents', 'Antineoplastic Agents'.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "class_name": {"type": "string", "description": "Pharmacological class name (e.g., 'Anti-Bacterial Agents', 'Statins', 'ACE Inhibitors')"},
+                "limit": {"type": "integer", "description": "Maximum results to return (default 50)"}
+            },
+            "required": ["class_name"]
+        },
+        endpoint="/api/class/{class_name}/drugs"
+    ),
+    ToolDefinition(
+        name="search_classes",
+        description="Search for pharmacological classes by name. Use when user mentions a drug class or asks about drug categories. Returns classes with ingredient counts.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "q": {"type": "string", "description": "Class name to search for (e.g., 'antibiotic', 'statin', 'antihypertensive')"}
+            },
+            "required": ["q"]
+        },
+        endpoint="/api/classes/search"
+    )
 ]
 
 SYSTEM_PROMPT = """You are a clinical pharmaceutical advisor with access to FDA drug data and expert-curated clinical weights.

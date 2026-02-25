@@ -36,6 +36,66 @@ from graph_weights_admin import get_admin, GraphWeightsAdmin
 from admin_routes_graph import register_graph_admin_routes
 
 
+
+# =============================================================================
+# DRUG CLASS ALIASES - Maps informal names to formal MeSH pharmacological classes
+# =============================================================================
+
+CLASS_ALIASES = {
+    # Statins
+    "statin": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
+    "statins": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
+    "hmg coa": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
+    "hmg-coa": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
+    "hmgcr": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
+    "cholesterol lowering": "Anticholesteremic Agents",
+    # Antibiotics
+    "antibiotic": "Anti-Bacterial Agents",
+    "antibiotics": "Anti-Bacterial Agents",
+    "antibacterial": "Anti-Bacterial Agents",
+    "antibacterials": "Anti-Bacterial Agents",
+    # Blood pressure
+    "beta blocker": "Adrenergic Beta-Antagonists",
+    "beta blockers": "Adrenergic Beta-Antagonists",
+    "ace inhibitor": "Angiotensin-Converting Enzyme Inhibitors",
+    "ace inhibitors": "Angiotensin-Converting Enzyme Inhibitors",
+    "arb": "Angiotensin II Receptor Antagonists",
+    "arbs": "Angiotensin II Receptor Antagonists",
+    "antihypertensive": "Antihypertensive Agents",
+    # Pain/Inflammation
+    "nsaid": "Anti-Inflammatory Agents, Non-Steroidal",
+    "nsaids": "Anti-Inflammatory Agents, Non-Steroidal",
+    "non-steroidal anti-inflammatory": "Anti-Inflammatory Agents, Non-Steroidal",
+    "opioid": "Analgesics, Opioid",
+    "opioids": "Analgesics, Opioid",
+    "narcotic": "Analgesics, Opioid",
+    # Diabetes
+    "sulfonylurea": "Hypoglycemic Agents",
+    "sulfonylureas": "Hypoglycemic Agents",
+    "antidiabetic": "Hypoglycemic Agents",
+    # Psychiatric
+    "antipsychotic": "Antipsychotic Agents",
+    "antipsychotics": "Antipsychotic Agents",
+    "antidepressant": "Antidepressive Agents",
+    "antidepressants": "Antidepressive Agents",
+    "anxiolytic": "Anti-Anxiety Agents",
+    "benzodiazepine": "Anti-Anxiety Agents",
+    "benzodiazepines": "Anti-Anxiety Agents",
+    # Other
+    "antifungal": "Antifungal Agents",
+    "antiviral": "Antiviral Agents",
+    "anticonvulsant": "Anticonvulsants",
+    "anticonvulsants": "Anticonvulsants",
+    "antiseizure": "Anticonvulsants",
+    "diuretic": "Diuretics",
+    "diuretics": "Diuretics",
+}
+
+def expand_class_query(query: str) -> str:
+    """Expand informal class names to formal MeSH names."""
+    query_lower = query.lower().strip()
+    return CLASS_ALIASES.get(query_lower, query)
+
 app = FastAPI(
     title="Pharmaceutical Knowledge Graph API - Hybrid",
     description="Redis (fast) + Neo4j (graph) hybrid API",
@@ -914,6 +974,99 @@ async def chat_endpoint(request: ChatRequest):
 # =============================================================================
 # SERVER STARTUP
 # =============================================================================
+
+
+# =============================================================================
+# PHARMACOLOGICAL CLASS ENDPOINTS
+# =============================================================================
+
+@app.get("/api/drug/{drug_id}/classes")
+async def get_drug_classes(drug_id: str):
+    """Get all pharmacological classes a drug belongs to."""
+    # Get drug name first
+    drug = redis_client.get(f"drug:{drug_id}")
+    if not drug:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    drug_data = json.loads(drug)
+    drug_name = drug_data.get("name", "")
+    
+    # Get ingredients and their classes
+    result = neo4j_query("""
+        MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_INGREDIENT_NAME]->(i:Ingredient)
+        MATCH (i)-[:BELONGS_TO]->(c:PharmacologicalClass)
+        RETURN DISTINCT 
+            i.name as ingredient,
+            c.name as class_name
+        ORDER BY i.name, c.name
+    """, {"set_id": drug_id})
+    
+    # Group by ingredient
+    classes_by_ingredient = {}
+    for r in result:
+        ing = r['ingredient']
+        if ing not in classes_by_ingredient:
+            classes_by_ingredient[ing] = []
+        classes_by_ingredient[ing].append(r['class_name'])
+    
+    return {
+        "drug_id": drug_id,
+        "drug_name": drug_name,
+        "classes_by_ingredient": classes_by_ingredient,
+        "total_classes": len(set(c for classes in classes_by_ingredient.values() for c in classes))
+    }
+
+@app.get("/api/class/{class_name}/drugs")
+async def get_drugs_in_class(class_name: str, limit: int = 50):
+    """Get all drugs that belong to a pharmacological class. Supports aliases like 'statin', 'antibiotic', etc."""
+    # Expand aliases
+    expanded_class = expand_class_query(class_name)
+    
+    result = neo4j_query("""
+        MATCH (c:PharmacologicalClass)
+        WHERE toLower(c.name) CONTAINS toLower($class_name)
+        MATCH (i:Ingredient)-[:BELONGS_TO]->(c)
+        OPTIONAL MATCH (i)<-[:HAS_INGREDIENT_NAME]-(e:Entity)
+        WITH c, i, count(DISTINCT e) as drug_count
+        RETURN 
+            c.name as class_name,
+            i.name as ingredient,
+            drug_count
+        ORDER BY drug_count DESC
+        LIMIT $limit
+    """, {"class_name": expanded_class, "limit": limit})
+    
+    return {
+        "query": class_name,
+        "expanded_to": expanded_class if expanded_class != class_name else None,
+        "class_name": result[0]["class_name"] if result else expanded_class,
+        "ingredients": [dict(r) for r in result],
+        "total_ingredients": len(result)
+    }
+
+@app.get("/api/classes/search")
+async def search_classes(q: str, limit: int = 20):
+    """Search for pharmacological classes by name. Supports aliases like 'statin', 'antibiotic', etc."""
+    # Expand aliases (e.g., "statin" -> "Hydroxymethylglutaryl-CoA Reductase Inhibitors")
+    expanded_query = expand_class_query(q)
+    
+    result = neo4j_query("""
+        MATCH (c:PharmacologicalClass)
+        WHERE toLower(c.name) CONTAINS toLower($query)
+        OPTIONAL MATCH (i:Ingredient)-[:BELONGS_TO]->(c)
+        WITH c, count(i) as ingredient_count
+        RETURN 
+            c.name as class_name,
+            ingredient_count
+        ORDER BY ingredient_count DESC
+        LIMIT $limit
+    """, {"query": expanded_query, "limit": limit})
+    
+    return {
+        "query": q,
+        "expanded_to": expanded_query if expanded_query != q else None,
+        "classes": [dict(r) for r in result]
+    }
 
 if __name__ == "__main__":
     import uvicorn
