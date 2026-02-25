@@ -324,7 +324,7 @@ async def execute_tool_call(tool_name: str, arguments: Dict) -> Dict:
     
     # Make the API call
     async with httpx.AsyncClient(timeout=30.0) as client:
-        base_url = "http://localhost:8002"
+        base_url = "http://localhost:8000"
         try:
             response = await client.get(f"{base_url}{endpoint}", params=params)
             

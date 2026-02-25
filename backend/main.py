@@ -1,4 +1,3 @@
-from llm_chat import chat_query
 """
 Pharmaceutical Knowledge Graph API
 Hybrid v3 - Redis (fast lookup) + Neo4j (graph relationships)
@@ -12,6 +11,16 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
+from llm_chat import chat_query
+
+class ChatMessage(BaseModel):
+    message: str
+    conversation_history: List[Dict] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    tool_calls: Optional[List[Dict]] = []
+    drugs_found: Optional[List[Dict]] = []
 import redis
 from neo4j import GraphDatabase
 
@@ -30,76 +39,12 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "Nani*48301")
 # =============================================================================
 
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-redis_drugs = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=15, decode_responses=True)
 neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-from graph_weights_admin import get_admin, GraphWeightsAdmin
-from admin_routes_graph import register_graph_admin_routes
-
-
-
-# =============================================================================
-# DRUG CLASS ALIASES - Maps informal names to formal MeSH pharmacological classes
-# =============================================================================
-
-CLASS_ALIASES = {
-    # Statins
-    "statin": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
-    "statins": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
-    "hmg coa": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
-    "hmg-coa": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
-    "hmgcr": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
-    "cholesterol lowering": "Anticholesteremic Agents",
-    # Antibiotics
-    "antibiotic": "Anti-Bacterial Agents",
-    "antibiotics": "Anti-Bacterial Agents",
-    "antibacterial": "Anti-Bacterial Agents",
-    "antibacterials": "Anti-Bacterial Agents",
-    # Blood pressure
-    "beta blocker": "Adrenergic Beta-Antagonists",
-    "beta blockers": "Adrenergic Beta-Antagonists",
-    "ace inhibitor": "Angiotensin-Converting Enzyme Inhibitors",
-    "ace inhibitors": "Angiotensin-Converting Enzyme Inhibitors",
-    "arb": "Angiotensin II Receptor Antagonists",
-    "arbs": "Angiotensin II Receptor Antagonists",
-    "antihypertensive": "Antihypertensive Agents",
-    # Pain/Inflammation
-    "nsaid": "Anti-Inflammatory Agents, Non-Steroidal",
-    "nsaids": "Anti-Inflammatory Agents, Non-Steroidal",
-    "non-steroidal anti-inflammatory": "Anti-Inflammatory Agents, Non-Steroidal",
-    "opioid": "Analgesics, Opioid",
-    "opioids": "Analgesics, Opioid",
-    "narcotic": "Analgesics, Opioid",
-    # Diabetes
-    "sulfonylurea": "Hypoglycemic Agents",
-    "sulfonylureas": "Hypoglycemic Agents",
-    "antidiabetic": "Hypoglycemic Agents",
-    # Psychiatric
-    "antipsychotic": "Antipsychotic Agents",
-    "antipsychotics": "Antipsychotic Agents",
-    "antidepressant": "Antidepressive Agents",
-    "antidepressants": "Antidepressive Agents",
-    "anxiolytic": "Anti-Anxiety Agents",
-    "benzodiazepine": "Anti-Anxiety Agents",
-    "benzodiazepines": "Anti-Anxiety Agents",
-    # Other
-    "antifungal": "Antifungal Agents",
-    "antiviral": "Antiviral Agents",
-    "anticonvulsant": "Anticonvulsants",
-    "anticonvulsants": "Anticonvulsants",
-    "antiseizure": "Anticonvulsants",
-    "diuretic": "Diuretics",
-    "diuretics": "Diuretics",
-}
-
-def expand_class_query(query: str) -> str:
-    """Expand informal class names to formal MeSH names."""
-    query_lower = query.lower().strip()
-    return CLASS_ALIASES.get(query_lower, query)
 
 app = FastAPI(
     title="Pharmaceutical Knowledge Graph API - Hybrid",
     description="Redis (fast) + Neo4j (graph) hybrid API",
-    version="3.0.4"
+    version="3.0.3"
 )
 
 app.add_middleware(
@@ -111,29 +56,6 @@ app.add_middleware(
 )
 
 DRUG_SEARCH_INDEX: Dict[str, List[Dict[str, str]]] = {}
-
-def build_search_index():
-    """Build search index from Redis data."""
-    global DRUG_SEARCH_INDEX
-    DRUG_SEARCH_INDEX = {}
-    if not redis_drugs:
-        print("❌ Redis drugs connection not available")
-        return
-    try:
-        # Load from drug_index (new format)
-        index_json = redis_drugs.get('pharma:drug_index')
-        if index_json:
-            DRUG_SEARCH_INDEX = json.loads(index_json)
-            total_variants = sum(len(v) for v in DRUG_SEARCH_INDEX.values())
-            print(f"✅ Search index loaded: {len(DRUG_SEARCH_INDEX)} unique drugs, {total_variants} total variants")
-            return
-        else:
-            print("❌ No drug index found in Redis db15")
-    except Exception as e:
-        print(f"❌ Error loading search index: {e}")
-
-# Load search index on startup
-build_search_index()
 
 # =============================================================================
 # NDC NORMALIZATION
@@ -211,118 +133,239 @@ def get_drug_from_neo4j_by_set_id(set_id: str) -> Dict:
         }
     return {}
 
-def get_related_drugs_by_set_id(set_id: str, indication: str = None) -> List[Dict]:
-    """Find drugs related by shared ingredients with clinical weighting."""
-    from clinical_weights_admin import get_combined_weight, weight_to_priority, get_weight_provenance
-    
-    # Method 1: Find drugs with same ingredient (generics/alternatives)
-    query1 = """
-    MATCH (e:Entity)-[:HAS_INGREDIENT_NAME]->(i:Ingredient)
-    WHERE e.fda_set_id = $set_id
-    WITH DISTINCT i
-    MATCH (i)<-[:HAS_INGREDIENT_NAME]-(other:Entity)
-    WHERE other.fda_set_id <> $set_id
-    RETURN DISTINCT 
-           other.name as name,
-           other.fda_set_id as set_id,
-           'same_ingredient' as relationship,
-           i.name as ingredient,
-           0 as class_size
-    LIMIT 10
+def get_related_drugs_by_set_id(set_id: str) -> List[Dict]:
+    """Find drugs that share ingredients with the given drug."""
+    query = """
+    MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_NDC]->(ndc:Entity)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)-[:CONSTITUTES]->(scc:RxNormConcept)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+    MATCH (other_cd:ClinicalDrug)-[:CONSTITUTES]->(scc)
+    WHERE other_cd <> cd
+    MATCH (other_ndc:Entity)<-[:HAS_NDC]-(other_fda:Entity)
+    WHERE (other_ndc)-[:MAPS_TO_RXCUI]->other_cd AND other_fda.fda_set_id <> $set_id
+    OPTIONAL MATCH (other_fda)-[:HAS_NDC]->(on)
+    RETURN DISTINCT other_fda.name as name,
+           other_fda.fda_set_id as set_id,
+           collect(DISTINCT on.name) as ndc_codes,
+           ing.name as shared_ingredient
+    LIMIT 20
     """
-    related_by_ingredient = neo4j_query(query1, {"set_id": set_id})
-    
-    # Method 2: Find drugs by pharmacological class
-    query2 = """
-    MATCH (e:Entity)-[:HAS_INGREDIENT_NAME]->(i:Ingredient)
-    WHERE e.fda_set_id = $set_id AND i.mesh_pharm IS NOT NULL
-    WITH i, split(i.mesh_pharm, '|') as source_classes
-    UNWIND source_classes as source_class
-    WITH i, source_class
-    MATCH (other_ing:Ingredient)
-    WHERE other_ing.mesh_pharm IS NOT NULL 
-      AND other_ing.name <> i.name
-      AND other_ing.mesh_pharm CONTAINS source_class
-    WITH source_class, other_ing, i,
-         size((other_ing)<-[:HAS_INGREDIENT_NAME]-()) as drugs_in_class
-    MATCH (other_ing)<-[:HAS_INGREDIENT_NAME]-(other_drug:Entity)
-    WHERE other_drug.fda_set_id <> $set_id
-    WITH other_drug, other_ing, source_class, drugs_in_class,
-         other_ing.mesh_pharm_prov as provenance,
-         other_ing.pmid as pmid,
-         other_ing.sid as sid
-    RETURN DISTINCT
-           other_drug.name as name,
-           other_drug.fda_set_id as set_id,
-           'pharmacological_class' as relationship,
-           other_ing.name as related_ingredient,
-           source_class as shared_class,
-           drugs_in_class as class_size,
-           provenance as mesh_provenance,
-           pmid as pubmed_id,
-           sid as pubchem_sid
-    ORDER BY drugs_in_class ASC
-    LIMIT 30
-    """
-    related_by_class = neo4j_query(query2, {"set_id": set_id})
-    
-    # Combine results
-    all_related = []
-    seen = set()
-    
-    # Process same ingredient matches (weight = 100, PRIMARY)
-    for r in related_by_ingredient:
-        key = r.get('name', '').lower()
-        if key not in seen:
-            seen.add(key)
-            r['clinical_weight'] = 100
-            r['weight_source'] = 'exact_match'
-            r['clinical_priority'] = 'PRIMARY'
-            all_related.append(r)
-    
-    # Process pharmacological class matches with clinical weighting
-    for r in related_by_class:
-        key = r.get('name', '').lower()
-        if key not in seen:
-            seen.add(key)
-            
-            ingredient = r.get('related_ingredient', '')
-            class_size = r.get('class_size', 999)
-            
-            # Get combined weight (expert or auto), with indication context
-            weight, source, rationale, evidence, note = get_combined_weight(ingredient, class_size, indication)
-            
-            r['clinical_weight'] = weight
-            r['weight_source'] = source
-            r['clinical_priority'] = weight_to_priority(weight)
-            
-            if rationale:
-                r['weight_rationale'] = rationale
-            if evidence:
-                r['weight_evidence'] = evidence
-            if note:
-                r['clinical_note'] = note
-            
-            # Add curator provenance for expert weights
-            if source.startswith('expert'):
-                provenance = get_weight_provenance(ingredient, indication)
-                if provenance and provenance.get('curator'):
-                    curator = provenance['curator']
-                    r['weight_provenance'] = {
-                        "curator": curator['name'],
-                        "credentials": curator['credentials'],
-                        "license": curator['license'],
-                        "provenance_hash": provenance.get('curator_hash', ''),
-                        "last_reviewed": provenance.get('last_updated', ''),
-                    }
-            
-            all_related.append(r)
-    
-    # Sort by clinical_weight descending, then class_size ascending
-    all_related.sort(key=lambda x: (-x.get('clinical_weight', 50), x.get('class_size', 999)))
-    
-    return all_related[:25]
+    return neo4j_query(query, {"set_id": set_id})
 
+def get_equivalent_drugs_by_set_id(set_id: str) -> List[Dict]:
+    """Get therapeutic equivalents (same ingredients, different manufacturer)."""
+    query = """
+    MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_NDC]->(ndc:Entity)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)
+    MATCH (cd)-[:IS_A]->(parent:RxNormConcept)
+    MATCH (other_cd:ClinicalDrug)-[:IS_A]->(parent)
+    WHERE other_cd <> cd
+    MATCH (other_ndc:Entity)<-[:HAS_NDC]-(other_fda:Entity)
+    WHERE (other_ndc)-[:MAPS_TO_RXCUI]->other_cd AND other_fda.fda_set_id <> $set_id
+    OPTIONAL MATCH (other_fda)-[:HAS_NDC]->(on)
+    RETURN DISTINCT other_fda.name as name,
+           other_fda.fda_set_id as set_id,
+           collect(DISTINCT on.name) as ndc_codes,
+           other_cd.name as equivalent_form
+    LIMIT 20
+    """
+    return neo4j_query(query, {"set_id": set_id})
+
+def get_ingredients_by_set_id(set_id: str) -> List[str]:
+    """Get active ingredients for a drug by set_id."""
+    query = """
+    MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_NDC]->(ndc:Entity)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)-[:CONSTITUTES]->(scc:RxNormConcept)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+    RETURN collect(DISTINCT ing.name) as ingredients
+    """
+    results = neo4j_query(query, {"set_id": set_id})
+    return results[0]['ingredients'] if results else []
+
+def get_all_relationships_by_set_id(set_id: str) -> Dict:
+    """Get all relationships for a drug."""
+    query = """
+    MATCH (e:Entity {fda_set_id: $set_id})
+    WHERE (e)-[:HAS_NDC]->()
+    OPTIONAL MATCH (e)-[:HAS_NDC]->(ndc:Entity)
+    OPTIONAL MATCH (ndc)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)
+    OPTIONAL MATCH (cd)-[:CONSTITUTES]->(scc:RxNormConcept)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+    OPTIONAL MATCH (scc)-[:HAS_DOSE_FORM]->(df:DoseForm)
+    OPTIONAL MATCH (cd)-[:IS_A]->(parent:RxNormConcept)
+    WITH e, ndc, cd, ing, df, parent
+    WITH e,
+         collect(DISTINCT ndc.name) as ndcs,
+         collect(DISTINCT cd.name) as clinical_drugs,
+         collect(DISTINCT cd.rxcui) as rxcuis,
+         collect(DISTINCT ing.name) as ingredients,
+         collect(DISTINCT df.name) as dose_forms,
+         collect(DISTINCT parent.name) as parent_concepts
+    RETURN e.name as name, ndcs, clinical_drugs, rxcuis, ingredients, dose_forms, parent_concepts
+    LIMIT 1
+    """
+    results = neo4j_query(query, {"set_id": set_id})
+    if results:
+        r = results[0]
+        return {
+            'name': r.get('name'),
+            'ndcs': [x for x in r.get('ndcs', []) if x],
+            'clinical_drugs': [x for x in r.get('clinical_drugs', []) if x],
+            'rxcuis': [x for x in r.get('rxcuis', []) if x],
+            'ingredients': [x for x in r.get('ingredients', []) if x],
+            'dose_forms': [x for x in r.get('dose_forms', []) if x],
+            'parent_concepts': [x for x in r.get('parent_concepts', []) if x]
+        }
+    return {}
+
+def get_drug_from_neo4j_by_ndc(ndc_codes: List[str]) -> Dict:
+    """Get drug info from Neo4j via NDC codes."""
+    if not ndc_codes:
+        return {}
+    query = """
+    MATCH (ndc:Entity)
+    WHERE ndc.name IN $ndc_codes AND 'NDC' IN labels(ndc)
+    OPTIONAL MATCH (fda:Entity)-[:HAS_NDC]->(ndc)
+    OPTIONAL MATCH (ndc)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)
+    OPTIONAL MATCH (cd)-[:CONSTITUTES]->(scc:RxNormConcept)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+    WITH ndc, fda, cd, ing
+    WITH fda, 
+         collect(DISTINCT ndc.name) as ndc_codes,
+         collect(DISTINCT cd.name) as clinical_drugs,
+         collect(DISTINCT ing.name) as ingredients
+    RETURN fda.name as name,
+           fda.fda_set_id as fda_set_id,
+           ndc_codes,
+           clinical_drugs,
+           ingredients
+    LIMIT 1
+    """
+    results = neo4j_query(query, {"ndc_codes": ndc_codes})
+    if results:
+        r = results[0]
+        return {
+            'name': r.get('name'),
+            'fda_set_id': r.get('fda_set_id'),
+            'ndc_codes': [x for x in r.get('ndc_codes', []) if x],
+            'clinical_drugs': [x for x in r.get('clinical_drugs', []) if x],
+            'ingredients': [x for x in r.get('ingredients', []) if x]
+        }
+    return {}
+
+# =============================================================================
+# FDA SECTION ORDERING
+# =============================================================================
+
+FDA_SECTION_ORDER = {
+    'INDICATIONS_AND_USAGE': 1, 'DOSAGE_AND_ADMINISTRATION': 2,
+    'DOSAGE_FORMS_AND_STRENGTHS': 3, 'CONTRAINDICATIONS': 4,
+    'WARNINGS_AND_PRECAUTIONS': 5, 'ADVERSE_REACTIONS': 6,
+    'DRUG_INTERACTIONS': 7, 'USE_IN_SPECIFIC_POPULATIONS': 8,
+    'DRUG_ABUSE_AND_DEPENDENCE': 9, 'OVERDOSAGE': 10,
+    'DESCRIPTION': 11, 'CLINICAL_PHARMACOLOGY': 12,
+    'NONCLINICAL_TOXICOLOGY': 13, 'CLINICAL_STUDIES': 14,
+    'REFERENCES': 15, 'HOW_SUPPLIED': 16,
+    'PATIENT_COUNSELING_INFORMATION': 17,
+    'BOXED_WARNING': 0, 'UNKNOWN': 99,
+}
+
+def extract_section_number(title: str) -> tuple:
+    title = title.strip()
+    match = re.match(r'^(\d+)(?:\.(\d+))?\s+', title)
+    if match:
+        major = int(match.group(1))
+        minor = int(match.group(2)) if match.group(2) else 0
+        return (major, minor, title)
+    return (None, None, title)
+
+def get_section_sort_key(section: dict) -> tuple:
+    title = section.get('title', '')
+    section_type = section.get('section_type', 'UNKNOWN')
+    major, minor, _ = extract_section_number(title)
+    if major is not None:
+        return (0, major, minor, title.lower())
+    return (1, FDA_SECTION_ORDER.get(section_type, 99), 0, title.lower())
+
+def parse_section_triples(triples: list) -> dict:
+    result = {'title': 'Unknown', 'section_type': 'UNKNOWN', 'content': '', 'drug_id': '', 'provenance_hash': ''}
+    for i, triple in enumerate(triples):
+        val = triple.get('value', '')
+        if isinstance(val, dict):
+            val = val.get('value', '')
+        val_str = str(val)
+        if i == 0:
+            result['title'] = val_str
+        elif i == 1:
+            result['drug_id'] = val_str
+        elif i == 2:
+            if val_str in FDA_SECTION_ORDER or val_str.isupper():
+                result['section_type'] = val_str
+            elif len(val_str) > 100:
+                result['content'] = val_str
+        elif i == 3:
+            if len(val_str) > 50:
+                result['content'] = val_str
+        elif i == 4:
+            if len(val_str) == 16:
+                result['provenance_hash'] = val_str
+            elif len(val_str) > 100:
+                result['content'] = val_str
+    return result
+
+# =============================================================================
+# REDIS HELPERS
+# =============================================================================
+
+def get_drug_from_redis(drug_id: str) -> Optional[Dict]:
+    data = redis_client.hget("pharma:enhanced_drugs", drug_id)
+    if data:
+        return json.loads(data)
+    return None
+
+def get_sections_from_redis(drug_id: str) -> List[Dict]:
+    section_ids = redis_client.smembers(f"pharma:drug:{drug_id}:sections")
+    sections = []
+    for sid in section_ids:
+        entity_data = redis_client.hget("pharma:entities", sid)
+        if entity_data:
+            entity = json.loads(entity_data)
+            if entity.get("triples"):
+                parsed = parse_section_triples(entity["triples"])
+                sections.append({
+                    'section_id': sid,
+                    'title': parsed['title'],
+                    'section_type': parsed['section_type'],
+                    'content_preview': parsed['content'][:300] + '...' if len(parsed['content']) > 300 else parsed['content'],
+                    'provenance_hash': parsed['provenance_hash']
+                })
+    sections.sort(key=get_section_sort_key)
+    return sections
+
+def build_memory_index():
+    global DRUG_SEARCH_INDEX
+    DRUG_SEARCH_INDEX = {}
+    count = 0
+    for entity_id, drug_json in redis_client.hscan_iter("pharma:enhanced_drugs"):
+        try:
+            drug = json.loads(drug_json)
+            name = drug.get('name', '').lower()
+            if name:
+                if name not in DRUG_SEARCH_INDEX:
+                    DRUG_SEARCH_INDEX[name] = []
+                DRUG_SEARCH_INDEX[name].append({
+                    'id': entity_id,
+                    'name': drug.get('name', ''),
+                    'manufacturer': drug.get('manufacturer', ''),
+                    'nda': drug.get('nda', ''),
+                    'set_id': drug.get('set_id', '')
+                })
+            count += 1
+        except:
+            pass
+    print(f"Built search index with {count} drugs, {len(DRUG_SEARCH_INDEX)} unique names")
+
+# =============================================================================
+# API ENDPOINTS
+# =============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    build_memory_index()
+    print("✅ Hybrid API v3.0.3 started: Redis + Neo4j connected")
 
 @app.get("/")
 async def root():
@@ -401,48 +444,32 @@ async def get_stats():
 # =============================================================================
 
 @app.get("/api/search/suggestions")
-async def get_suggestions(q: str = Query(..., min_length=2)):
-    """Get search suggestions for drug names (grouped by name)"""
+async def get_suggestions(q: str = Query(..., min_length=1)):
+    """Get search suggestions grouped by drug name with variant count."""
     q_lower = q.lower()
-    suggestions = []
+    starts_with_matches = []
+    contains_matches = []
     
     for name, variants in DRUG_SEARCH_INDEX.items():
-        if q_lower in name:
-            suggestions.append({
-                "name": name.title(),
+        if name.startswith(q_lower):
+            starts_with_matches.append({
+                "name": variants[0].get('name', name).title() if variants else name.title(),
                 "variant_count": len(variants),
                 "top_manufacturer": variants[0].get('manufacturer', 'Unknown') if variants else 'Unknown'
             })
-            if len(suggestions) >= 15:
-                break
+        elif q_lower in name:
+            contains_matches.append({
+                "name": variants[0].get('name', name).title() if variants else name.title(),
+                "variant_count": len(variants),
+                "top_manufacturer": variants[0].get('manufacturer', 'Unknown') if variants else 'Unknown'
+            })
+        
+        if len(starts_with_matches) >= 15:
+            break
     
-    return {"suggestions": suggestions}
-
-@app.get("/api/drug-variants/{drug_name}")
-async def get_drug_variants(drug_name: str):
-    """Get all manufacturer variants for a drug name"""
-    drug_name_lower = drug_name.lower().strip()
-    
-    if drug_name_lower not in DRUG_SEARCH_INDEX:
-        raise HTTPException(status_code=404, detail="Drug not found")
-    
-    variants = DRUG_SEARCH_INDEX[drug_name_lower]
-    
-    # Add section count to each variant
-    enriched_variants = []
-    for v in variants:
-        section_count = redis_client.scard(f"pharma:drug:{v['id']}:sections")
-        enriched_variants.append({
-            **v,
-            "section_count": section_count
-        })
-    
-    return {
-        "drug_name": drug_name.title(),
-        "total_variants": len(enriched_variants),
-        "variants": enriched_variants
-    }
-
+    # Prioritize starts-with matches, limit total to 20
+    suggestions = starts_with_matches[:15] + contains_matches[:5]
+    return {"query": q, "suggestions": suggestions[:20]}
 
 @app.get("/api/drug-variants/{drug_name}")
 async def get_drug_variants(drug_name: str):
@@ -520,18 +547,12 @@ async def search_drugs(q: str, limit: int = 20):
     for name, drugs in DRUG_SEARCH_INDEX.items():
         if q_lower in name:
             for drug in drugs:
-                result_item = {
+                results.append({
                     'id': drug['id'],
                     'name': drug['name'],
-                    'rxcui': drug.get('rxcui', ''),
-                    'tty': drug.get('tty', ''),
-                    'citation': drug.get('citation', '')
-                }
-                if drug.get('manufacturer'):
-                    result_item['manufacturer'] = drug['manufacturer']
-                if drug.get('nda'):
-                    result_item['nda'] = drug['nda']
-                results.append(result_item)
+                    'manufacturer': drug['manufacturer'],
+                    'nda': drug['nda']
+                })
                 if len(results) >= limit:
                     break
         if len(results) >= limit:
@@ -563,316 +584,569 @@ async def list_drugs(limit: int = 50, offset: int = 0):
 # NEO4J ENDPOINTS
 # =============================================================================
 
-
-
 @app.get("/api/drug/{drug_id}/related")
-async def get_related_drugs(drug_id: str, indication: str = None):
-    """Get drugs related by shared ingredients with clinical weighting.
+async def get_related_drugs(drug_id: str):
+    """Get drugs related by shared ingredients."""
+    drug_data = get_drug_from_redis(drug_id)
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
     
-    Args:
-        drug_id: Drug identifier (FDA entity_id or RxNorm ID)
-        indication: Optional disease state for indication-specific weighting
-                   Options: hyperlipidemia, cv_risk_reduction, hypertriglyceridemia, statin_intolerance
-    """
-    # Normalize indication parameter (convert spaces to underscores, lowercase)
-    if indication:
-        indication = indication.replace(" ", "_").lower()
-    
-    # Try to bridge RxNorm ID to FDA entity
-    entity_id, set_id, drug_name = get_fda_entity_from_rxnorm(drug_id)
-    
+    set_id = drug_data.get('set_id', '')
     if not set_id:
-        raise HTTPException(status_code=404, detail=f"Drug not found: {drug_id}")
+        return {"drug_id": drug_id, "related_drugs": [], "message": "No set_id found"}
     
-    related = get_related_drugs_by_set_id(set_id, indication=indication)
+    related = get_related_drugs_by_set_id(set_id)
+    return {"drug_id": drug_id, "set_id": set_id, "related_drugs": related}
+
+@app.get("/api/drug/{drug_id}/equivalents")
+async def get_equivalents(drug_id: str):
+    """Get therapeutic equivalents."""
+    drug_data = get_drug_from_redis(drug_id)
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    set_id = drug_data.get('set_id', '')
+    if not set_id:
+        return {"drug_id": drug_id, "equivalents": [], "message": "No set_id found"}
+    
+    equivalents = get_equivalent_drugs_by_set_id(set_id)
+    return {"drug_id": drug_id, "set_id": set_id, "equivalents": equivalents}
+
+@app.get("/api/drug/{drug_id}/ingredients")
+async def get_ingredients(drug_id: str):
+    """Get active ingredients."""
+    drug_data = get_drug_from_redis(drug_id)
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    set_id = drug_data.get('set_id', '')
+    if not set_id:
+        return {"drug_id": drug_id, "ingredients": [], "message": "No set_id found"}
+    
+    ingredients = get_ingredients_by_set_id(set_id)
+    return {"drug_id": drug_id, "set_id": set_id, "ingredients": ingredients}
+
+@app.get("/api/drug/{drug_id}/graph")
+async def get_drug_graph(drug_id: str):
+    """Get all Neo4j graph relationships for a drug."""
+    drug_data = get_drug_from_redis(drug_id)
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    set_id = drug_data.get('set_id', '')
+    if not set_id:
+        return {"drug_id": drug_id, "graph": {}, "message": "No set_id found"}
+    
+    graph = get_all_relationships_by_set_id(set_id)
+    return {"drug_id": drug_id, "set_id": set_id, "graph": graph}
+
+@app.get("/api/ndc/{ndc_code}")
+async def lookup_by_ndc(ndc_code: str):
+    """Look up drug by NDC code."""
+    ndc_normalized = normalize_ndc_to_11(ndc_code)
+    if not ndc_normalized:
+        raise HTTPException(status_code=400, detail="Invalid NDC format")
+    
+    query = """
+    MATCH (e:Entity)-[:HAS_NDC]->(n:Entity)
+    WHERE n.name = $ndc AND 'NDC' IN labels(n)
+    RETURN e.name as name, e.entity_id as entity_id, e.fda_set_id as fda_set_id
+    """
+    results = neo4j_query(query, {"ndc": ndc_normalized})
+    if not results:
+        raise HTTPException(status_code=404, detail="NDC not found in graph")
+    
+    drug_info = results[0]
+    set_id = drug_info.get('fda_set_id')
+    
+    redis_data = None
+    if set_id:
+        for eid, drug_json in redis_client.hscan_iter("pharma:enhanced_drugs"):
+            drug = json.loads(drug_json)
+            if drug.get('set_id') == set_id:
+                redis_data = drug
+                redis_data['redis_id'] = eid
+                break
     
     return {
-        "drug_id": drug_id,
-        "entity_id": entity_id,
-        "set_id": set_id, 
-        "drug_name": drug_name,
-        "indication": indication,
-        "related_drugs": related
+        "ndc_input": ndc_code,
+        "ndc_normalized": ndc_normalized,
+        "graph_match": drug_info,
+        "redis_data": redis_data
     }
 
+@app.get("/api/set_id/{set_id}")
+async def lookup_by_set_id(set_id: str):
+    """Look up drug by FDA set_id."""
+    neo4j_data = get_drug_from_neo4j_by_set_id(set_id)
+    
+    redis_data = None
+    redis_id = None
+    for eid, drug_json in redis_client.hscan_iter("pharma:enhanced_drugs"):
+        drug = json.loads(drug_json)
+        if drug.get('set_id') == set_id:
+            redis_data = drug
+            redis_id = eid
+            break
+    
+    return {
+        "set_id": set_id,
+        "redis_id": redis_id,
+        "redis_data": redis_data,
+        "neo4j_data": neo4j_data
+    }
+
+@app.get("/api/rxcui/{rxcui}")
+async def lookup_by_rxcui(rxcui: str):
+    """Look up drug by RxNorm RxCUI."""
+    query = """
+    MATCH (r:RxNormConcept {rxcui: $rxcui})
+    OPTIONAL MATCH (r)<-[:CONSTITUTES]-(cd:ClinicalDrug)
+    OPTIONAL MATCH (cd)<-[:MAPS_TO_RXCUI]-(ndc:Entity)
+    OPTIONAL MATCH (r)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+    RETURN r.name as name,
+           r.rxcui as rxcui,
+           r.tty as tty,
+           collect(DISTINCT cd.name) as clinical_drugs,
+           collect(DISTINCT ndc.name) as ndc_codes,
+           collect(DISTINCT ing.name) as ingredients
+    """
+    results = neo4j_query(query, {"rxcui": rxcui})
+    if not results:
+        raise HTTPException(status_code=404, detail="RxCUI not found")
+    return results[0]
+
+@app.get("/api/section-types")
+async def get_section_types():
+    return {"section_types": list(FDA_SECTION_ORDER.keys())}
+
+# =============================================================================
+# CATCH-ALL FOR FRONTEND
+# =============================================================================
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(chat_message: ChatMessage):
+    """Natural language query powered by LLM."""
+    try:
+        result = await chat_query(chat_message.message, chat_message.conversation_history)
+        return ChatResponse(
+            response=result.get("response", ""),
+            tool_calls=result.get("tool_calls", []),
+            drugs_found=result.get("drugs_found")
+        )
+    except Exception as e:
+        print(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# DRUG CLASS ENDPOINTS (for LLM chat)
+# =============================================================================
+
+# Pharmacological class aliases
+CLASS_ALIASES = {
+    "statin": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
+    "statins": "Hydroxymethylglutaryl-CoA Reductase Inhibitors",
+    "beta blocker": "Adrenergic Beta-Antagonists",
+    "beta blockers": "Adrenergic Beta-Antagonists",
+    "ace inhibitor": "Angiotensin-Converting Enzyme Inhibitors",
+    "ace inhibitors": "Angiotensin-Converting Enzyme Inhibitors",
+    "arb": "Angiotensin II Receptor Antagonists",
+    "arbs": "Angiotensin II Receptor Antagonists",
+    "antibiotic": "Anti-Bacterial Agents",
+    "antibiotics": "Anti-Bacterial Agents",
+    "ssri": "Serotonin Uptake Inhibitors",
+    "ssris": "Serotonin Uptake Inhibitors",
+    "opioid": "Opioid Agonists",
+    "opioids": "Opioid Agonists",
+    "antifungal": "Antifungal Agents",
+    "antifungals": "Antifungal Agents",
+    "antiviral": "Antiviral Agents",
+    "antivirals": "Antiviral Agents",
+    "diuretic": "Diuretics",
+    "diuretics": "Diuretics",
+    "calcium channel blocker": "Calcium Channel Blockers",
+    "calcium channel blockers": "Calcium Channel Blockers",
+}
+
+@app.get("/api/classes/search")
+async def search_pharmacological_classes(q: str, limit: int = 10):
+    """Search for pharmacological classes by name or alias."""
+    q_lower = q.lower().strip()
+    results = []
+    
+    # Check aliases first
+    if q_lower in CLASS_ALIASES:
+        results.append({
+            "class_name": CLASS_ALIASES[q_lower],
+            "matched_alias": q_lower,
+            "ingredient_count": None
+        })
+    
+    # Search Neo4j for classes
+    query = """
+    MATCH (ing:Ingredient)-[:BELONGS_TO_CLASS]->(c:PharmacologicalClass)
+    WHERE toLower(c.name) CONTAINS toLower($query)
+    WITH c, count(DISTINCT ing) as ingredient_count
+    RETURN c.name as class_name, ingredient_count
+    ORDER BY ingredient_count DESC
+    LIMIT $limit
+    """
+    try:
+        neo4j_results = neo4j_query(query, {"query": q, "limit": limit})
+        for r in neo4j_results:
+            if r["class_name"] not in [res["class_name"] for res in results]:
+                results.append({
+                    "class_name": r["class_name"],
+                    "matched_alias": None,
+                    "ingredient_count": r["ingredient_count"]
+                })
+    except Exception as e:
+        print(f"Neo4j class search error: {e}")
+    
+    # Check if we expanded via alias
+    expanded_to = CLASS_ALIASES.get(q_lower) if q_lower in CLASS_ALIASES else None
+    
+    return {
+        "query": q,
+        "expanded_to": expanded_to,
+        "classes": results[:limit]
+    }
+
+@app.get("/api/drug/{drug_id}/classes")
+async def get_drug_pharmacological_classes(drug_id: str):
+    """Get pharmacological classes for a drug."""
+    drug_data = get_drug_from_redis(drug_id)
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    set_id = drug_data.get('set_id', '')
+    if not set_id:
+        return {"drug_id": drug_id, "classes": [], "message": "No set_id found"}
+    
+    query = """
+    MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_NDC]->(ndc:Entity)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)-[:CONSTITUTES]->(scc:RxNormConcept)<-[:HAS_INGREDIENT]-(ing:Ingredient)-[:BELONGS_TO_CLASS]->(c:PharmacologicalClass)
+    RETURN DISTINCT c.name as class_name, collect(DISTINCT ing.name) as ingredients
+    """
+    try:
+        results = neo4j_query(query, {"set_id": set_id})
+        classes = []
+        for r in results:
+            classes.append({
+                "class_name": r["class_name"],
+                "ingredients": r["ingredients"]
+            })
+        return {"drug_id": drug_id, "set_id": set_id, "classes": classes}
+    except Exception as e:
+        print(f"Neo4j class lookup error: {e}")
+        return {"drug_id": drug_id, "classes": [], "error": str(e)}
+
+@app.get("/api/class/{class_name}/drugs")
+async def get_drugs_in_pharmacological_class(class_name: str, limit: int = 50):
+    """Get all drugs/ingredients in a pharmacological class."""
+    # Check aliases
+    class_name_lower = class_name.lower().strip()
+    expanded_to = CLASS_ALIASES.get(class_name_lower)
+    actual_class = expanded_to if expanded_to else class_name
+    
+    query = """
+    MATCH (ing:Ingredient)-[:BELONGS_TO_CLASS]->(c:PharmacologicalClass)
+    WHERE toLower(c.name) CONTAINS toLower($class_name)
+    WITH c, ing
+    OPTIONAL MATCH (ing)<-[:HAS_INGREDIENT]-(scc:RxNormConcept)<-[:CONSTITUTES]-(cd:ClinicalDrug)<-[:MAPS_TO_RXCUI]-(ndc:Entity)<-[:HAS_NDC]-(fda:Entity)
+    WITH c, ing, count(DISTINCT fda) as drug_count
+    RETURN c.name as class_name, ing.name as ingredient, drug_count
+    ORDER BY drug_count DESC
+    LIMIT $limit
+    """
+    try:
+        results = neo4j_query(query, {"class_name": actual_class, "limit": limit})
+        ingredients = []
+        for r in results:
+            ingredients.append({
+                "class_name": r["class_name"],
+                "ingredient": r["ingredient"],
+                "drug_count": r["drug_count"]
+            })
+        return {
+            "query": class_name,
+            "expanded_to": expanded_to,
+            "class_name": actual_class,
+            "ingredients": ingredients,
+            "total_ingredients": len(ingredients)
+        }
+    except Exception as e:
+        print(f"Neo4j class drugs lookup error: {e}")
+        return {"query": class_name, "ingredients": [], "error": str(e)}
+
+
+
+# =============================================================================
+# GRC-20 STRUCTURE ENDPOINT
+# =============================================================================
+
+@app.get("/api/grc20/structure/{drug_id}")
+async def get_grc20_structure(drug_id: str):
+    """Get GRC-20 compliant structure for a drug entity."""
+    # Get drug data
+    drug_data = get_drug_from_redis(drug_id)
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    # Get sections for this drug
+    section_ids = list(redis_client.smembers(f"pharma:drug:{drug_id}:sections"))
+    
+    # Build drug entity triples
+    drug_triples = [
+        {
+            "attribute_id": "name_attr_001",
+            "attribute_label": "name",
+            "value": drug_data.get("name", ""),
+            "value_full_length": len(drug_data.get("name", "")),
+            "value_type": "string"
+        },
+        {
+            "attribute_id": "set_id_attr_002",
+            "attribute_label": "set_id",
+            "value": drug_data.get("set_id", ""),
+            "value_full_length": len(drug_data.get("set_id", "")),
+            "value_type": "uuid"
+        },
+        {
+            "attribute_id": "manufacturer_attr_003",
+            "attribute_label": "manufacturer",
+            "value": drug_data.get("manufacturer", ""),
+            "value_full_length": len(drug_data.get("manufacturer", "")),
+            "value_type": "string"
+        },
+        {
+            "attribute_id": "nda_attr_004",
+            "attribute_label": "nda",
+            "value": drug_data.get("nda", ""),
+            "value_full_length": len(drug_data.get("nda", "")),
+            "value_type": "string"
+        },
+        {
+            "attribute_id": "ndc_attr_005",
+            "attribute_label": "ndc",
+            "value": drug_data.get("ndc", ""),
+            "value_full_length": len(drug_data.get("ndc", "")),
+            "value_type": "string"
+        },
+        {
+            "attribute_id": "citation_attr_006",
+            "attribute_label": "citation",
+            "value": drug_data.get("ama_citation", ""),
+            "value_full_length": len(drug_data.get("ama_citation", "")),
+            "value_type": "string"
+        }
+    ]
+    
+    # Get section titles
+    section_titles = []
+    sample_section = None
+    
+    for section_id in section_ids[:15]:  # Limit to 15 for performance
+        section_json = redis_client.hget("pharma:entities", section_id)
+        if section_json:
+            section = json.loads(section_json)
+            triples = section.get("triples", [])
+            
+            # Parse section info
+            title = "Unknown"
+            section_type = "UNKNOWN"
+            content = ""
+            provenance_hash = ""
+            
+            for i, triple in enumerate(triples):
+                val = triple.get("value", "")
+                if i == 0:
+                    title = str(val)[:100]  # Title is first
+                elif i == 2:
+                    if isinstance(val, str) and val.isupper():
+                        section_type = val
+                elif i == 3 and len(str(val)) > 50:
+                    content = str(val)
+                elif i == 4 and len(str(val)) == 16:
+                    provenance_hash = str(val)
+            
+            section_titles.append({
+                "id": section_id,
+                "title": title
+            })
+            
+            # Use first section as sample
+            if sample_section is None:
+                section_triples = []
+                for i, triple in enumerate(triples):
+                    val = triple.get("value", "")
+                    label_map = {0: "title", 1: "drug_id", 2: "section_type", 3: "content", 4: "provenance_hash"}
+                    section_triples.append({
+                        "attribute_id": triple.get("attribute", ""),
+                        "attribute_label": label_map.get(i, f"attr_{i}"),
+                        "value": str(val)[:500] if len(str(val)) > 500 else str(val),
+                        "value_full_length": len(str(val)),
+                        "value_type": "string"
+                    })
+                
+                sample_section = {
+                    "id": section_id,
+                    "title": title,
+                    "triple_count": len(triples),
+                    "triples": section_triples
+                }
+    
+    return {
+        "drug_entity": {
+            "id": drug_id,
+            "triple_count": len(drug_triples),
+            "unique_triple_count": len(drug_triples),
+            "triples": drug_triples,
+            "context": {
+                "drug_name": drug_data.get("name", ""),
+                "manufacturer": drug_data.get("manufacturer", ""),
+                "set_id": drug_data.get("set_id", "")
+            }
+        },
+        "relationship": {
+            "type": "has_section",
+            "total_sections": len(section_ids),
+            "sample_section_ids": section_ids[:5],
+            "section_titles": section_titles
+        },
+        "sample_section": sample_section
+    }
+
+
+
+# =============================================================================
+# PUBCHEM PROPERTIES ENDPOINT
+# =============================================================================
+
+@app.get("/api/drug/{drug_id}/pubchem")
+async def get_drug_pubchem(drug_id: str):
+    """Get PubChem properties for ingredients in a drug."""
+    # Get drug data to find set_id
+    drug_data = get_drug_from_redis(drug_id)
+    if not drug_data:
+        # Try as drug name
+        drug_name = drug_id.replace("-", " ").lower()
+        for name, variants in DRUG_SEARCH_INDEX.items():
+            if drug_name in name.lower():
+                drug_data = variants[0]
+                break
+    
+    if not drug_data:
+        raise HTTPException(status_code=404, detail="Drug not found")
+    
+    set_id = drug_data.get("set_id")
+    if not set_id:
+        return {"ingredients": [], "drug_name": drug_data.get("name", drug_id)}
+    
+    # Query Neo4j for ingredients with PubChem data
+    query = """
+    MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_NDC]->(ndc:Entity)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)-[:CONSTITUTES]->(scc:RxNormConcept)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+    RETURN DISTINCT
+        ing.rxcui as rxcui,
+        ing.name as name,
+        ing.pubchem_cid as cid,
+        ing.sid as sid,
+        ing.smiles as smiles,
+        ing.inchikey as inchikey,
+        ing.iupac_name as iupac,
+        ing.pmid as pmid
+    """
+    
+    try:
+        results = neo4j_query(query, {"set_id": set_id})
+        ingredients = []
+        for r in results:
+            ing = {
+                "rxcui": r.get("rxcui", ""),
+                "name": r.get("name", ""),
+                "cid": r.get("cid"),
+                "sid": r.get("sid"),
+                "smiles": r.get("smiles"),
+                "inchikey": r.get("inchikey"),
+                "iupac": r.get("iupac"),
+                "pmid": r.get("pmid")
+            }
+            # Only include if we have some data
+            if ing["cid"] or ing["smiles"] or ing["inchikey"]:
+                ingredients.append(ing)
+        
+        return {
+            "drug_id": drug_id,
+            "drug_name": drug_data.get("name", ""),
+            "set_id": set_id,
+            "ingredients": ingredients
+        }
+    except Exception as e:
+        print(f"PubChem query error: {e}")
+        return {"ingredients": [], "error": str(e)}
+
+
+@app.get("/{path:path}")
+async def catch_all(path: str):
+    frontend_path = f"/mnt/fast_raid/server_projects/Geo/graph_workshop/pharma-frontend/build/{path}"
+    if os.path.exists(frontend_path):
+        return FileResponse(frontend_path)
+    return FileResponse("/mnt/fast_raid/server_projects/Geo/graph_workshop/pharma-frontend/build/index.html")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# =============================================================================
+# CLINICAL WEIGHTS AND GRAPH ENDPOINTS
+# =============================================================================
+
+# Import weight admin modules
+try:
+    from graph_weights_admin import get_admin
+    from clinical_weights_admin import get_combined_weight, weight_to_priority, get_weight_provenance
+    WEIGHTS_AVAILABLE = True
+except ImportError:
+    WEIGHTS_AVAILABLE = False
+    print("⚠️ Weight admin modules not available")
 
 @app.get("/api/clinical/weights")
 async def get_clinical_weights():
     """Get all clinical expert weights."""
-    from clinical_weights_admin import get_all_weights, get_curator_info
-    return {
-        "curator": get_curator_info(),
-        "weights": get_all_weights()
-    }
-
+    if not WEIGHTS_AVAILABLE:
+        return {"weights": {}, "error": "Weights module not available"}
+    from clinical_weights_admin import get_all_weights
+    return {"weights": get_all_weights()}
 
 @app.get("/api/clinical/disease-states")
 async def get_disease_states():
-    """Get supported disease states for indication-specific weighting."""
+    """Get all disease states for indication-specific weighting."""
+    if not WEIGHTS_AVAILABLE:
+        return {"disease_states": {}, "error": "Weights module not available"}
     from clinical_weights_admin import get_disease_states
-    return get_disease_states()
-
-
-# =============================================================================
-# REDIS HELPER FUNCTIONS
-# =============================================================================
-
-
-def get_fda_entity_from_rxnorm(drug_id: str) -> tuple:
-    """Bridge RxNorm ID to FDA entity_id via Neo4j.
-    
-    Returns: (entity_id, set_id, drug_name) or (None, None, None)
-    """
-    # First check if this is already an FDA entity_id
-    drug_data = get_drug_from_redis(drug_id)
-    if drug_data:
-        return drug_data.get('entity_id'), drug_data.get('set_id'), drug_data.get('name')
-    
-    # Try to find RxCUI from drug_index
-    import redis as redis_module
-    r_drugs = redis_module.Redis(host='localhost', port=6379, db=15, decode_responses=True)
-    
-    idx_json = r_drugs.get('pharma:drug_index')
-    if idx_json:
-        idx = json.loads(idx_json)
-        # Search for drug_id in the index
-        for name, variants in idx.items():
-            for v in variants:
-                if v.get('id') == drug_id:
-                    rxcui = v.get('rxcui')
-                    drug_name = v.get('name')
-                    if rxcui:
-                        # Find FDA Entity via Ingredient RxCUI in Neo4j
-                        query = """
-                        MATCH (e:Entity)-[:HAS_INGREDIENT_NAME]->(i:Ingredient)
-                        WHERE i.rxcui = $rxcui
-                        RETURN e.name as name, e.fda_set_id as set_id
-                        LIMIT 1
-                        """
-                        results = neo4j_query(query, {"rxcui": rxcui})
-                        if results:
-                            set_id = results[0].get('set_id')
-                            # Look up entity_id in Redis
-                            for k, v in redis_client.hgetall("pharma:enhanced_drugs").items():
-                                data = json.loads(v)
-                                if data.get('set_id') == set_id:
-                                    return data.get('entity_id'), set_id, drug_name
-                    break
-    return None, None, None
-
-def get_drug_from_redis(drug_id: str) -> Dict:
-    """Get drug data from Redis by entity_id."""
-    try:
-        drug_json = redis_client.hget("pharma:enhanced_drugs", drug_id)
-        if drug_json:
-            return json.loads(drug_json)
-        return None
-    except Exception as e:
-        print(f"Redis error getting drug {drug_id}: {e}")
-        return None
-
-
-def get_sections_from_redis(drug_id: str) -> List[Dict]:
-    """Get all sections for a drug from Redis."""
-    sections = []
-    try:
-        section_ids = redis_client.smembers(f"pharma:drug:{drug_id}:sections")
-        for section_id in section_ids:
-            section_json = redis_client.hget("pharma:entities", section_id)
-            if section_json:
-                section = json.loads(section_json)
-                sections.append({
-                    'id': section_id,
-                    'title': section.get('title', ''),
-                    'content': section.get('content', '')[:500],  # Truncate for list view
-                    'section_type': section.get('section_type', ''),
-                    'provenance_hash': section.get('provenance_hash', '')
-                })
-    except Exception as e:
-        print(f"Redis error getting sections for {drug_id}: {e}")
-    return sections
-
-
-# =============================================================================
-# CLINICAL WEIGHTS ADMIN API
-# =============================================================================
-
-@app.get("/api/admin/weights")
-async def admin_list_weights():
-    """List all drugs with clinical weights."""
-    from clinical_weights_admin import load_weights
-    data = load_weights()
-    return {
-        "count": len(data.get("drugs", {})),
-        "curator": data.get("curator"),
-        "last_updated": data.get("last_updated"),
-        "drugs": data.get("drugs", {})
-    }
-
-
-@app.get("/api/admin/weights/{drug_name}")
-async def admin_get_weight(drug_name: str):
-    """Get weight for a specific drug."""
-    from clinical_weights_admin import get_drug_weight
-    weight = get_drug_weight(drug_name)
-    if not weight:
-        raise HTTPException(status_code=404, detail=f"Drug '{drug_name}' not found in weights")
-    return {"drug": drug_name.lower(), "weight": weight}
-
-
-@app.post("/api/admin/weights/{drug_name}")
-async def admin_set_weight(drug_name: str, weight_data: dict):
-    """Create or update weight for a drug.
-    
-    Example body:
-    {
-        "default": {
-            "weight": 80,
-            "rationale": "Well-tolerated, generic available",
-            "evidence": "ACC/AHA 2018 Class IIa"
-        },
-        "indications": {
-            "statin_intolerance": {"weight": 90, "rationale": "First-line alternative"}
-        },
-        "clinical_note": "Generic available. Good safety profile.",
-        "drug_class": "Cholesterol Absorption Inhibitor"
-    }
-    """
-    from clinical_weights_admin import set_drug_weight
-    try:
-        result = set_drug_weight(drug_name, weight_data)
-        return {"status": "success", "drug": drug_name.lower(), "weight": result}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.delete("/api/admin/weights/{drug_name}")
-async def admin_delete_weight(drug_name: str):
-    """Delete a drug's weight entry."""
-    from clinical_weights_admin import delete_drug_weight
-    if delete_drug_weight(drug_name):
-        return {"status": "deleted", "drug": drug_name.lower()}
-    raise HTTPException(status_code=404, detail=f"Drug '{drug_name}' not found")
-
-
-@app.get("/api/admin/disease-states")
-async def admin_list_disease_states():
-    """List all disease states for indication-specific weighting."""
-    from clinical_weights_admin import get_disease_states
-    return get_disease_states()
-
-
-@app.post("/api/admin/disease-states/{key}")
-async def admin_add_disease_state(key: str, info: dict):
-    """Add or update a disease state.
-    
-    Example body:
-    {
-        "name": "Diabetic Dyslipidemia",
-        "description": "Lipid abnormalities in diabetic patients",
-        "first_line": "High-intensity statins",
-        "guidelines": "ADA 2023, ACC/AHA 2018"
-    }
-    """
-    from clinical_weights_admin import add_disease_state
-    return add_disease_state(key, info)
-
-
-@app.get("/api/admin/curator")
-async def admin_get_curator():
-    """Get curator credentials."""
-    from clinical_weights_admin import get_curator_info
-    return get_curator_info()
-
-
-@app.put("/api/admin/curator")
-async def admin_set_curator(curator: dict):
-    """Update curator credentials.
-    
-    Example body:
-    {
-        "name": "Kevin G",
-        "credentials": "PharmD",
-        "license": "WA DOH RPH License #PH61629288",
-        "experience": "20+ years clinical pharmacy practice",
-        "specialization": "Ambulatory care, chronic disease management"
-    }
-    """
-    from clinical_weights_admin import set_curator_info
-    return set_curator_info(curator)
-
-
-@app.get("/api/admin/summary")
-async def admin_summary():
-    """Get summary statistics of the weight system."""
-    from clinical_weights_admin import load_weights
-    data = load_weights()
-    drugs = data.get("drugs", {})
-    
-    # Count by priority
-    priority_counts = {"PRIMARY": 0, "SECONDARY": 0, "TERTIARY": 0, "CAUTION": 0}
-    indication_counts = {}
-    
-    for drug, info in drugs.items():
-        weight = info.get("default", {}).get("weight", 50)
-        if weight >= 90:
-            priority_counts["PRIMARY"] += 1
-        elif weight >= 60:
-            priority_counts["SECONDARY"] += 1
-        elif weight >= 30:
-            priority_counts["TERTIARY"] += 1
-        else:
-            priority_counts["CAUTION"] += 1
-        
-        for ind in info.get("indications", {}).keys():
-            indication_counts[ind] = indication_counts.get(ind, 0) + 1
-    
-    return {
-        "total_drugs": len(drugs),
-        "priority_distribution": priority_counts,
-        "indications_supported": indication_counts,
-        "curator": data.get("curator", {}).get("name"),
-        "last_updated": data.get("last_updated"),
-        "version": data.get("version")
-    }
-
-
-# =============================================================================
-# GRAPH-BASED ADMIN ROUTES
-# =============================================================================
-
-# Register graph-based admin routes
-register_graph_admin_routes(app)
+    return {"disease_states": get_disease_states()}
 
 @app.get("/api/graph/weight/{ingredient}")
-async def graph_get_weight(ingredient: str, indication: str = None):
-    """Get clinical weight for an ingredient from the graph."""
-    from graph_weights_admin import get_admin
-    admin = get_admin()
-    weight = admin.get_weight(ingredient, indication)
-    if not weight:
-        raise HTTPException(status_code=404, detail=f"No weight found for '{ingredient}'")
-    return {"ingredient": ingredient, "indication": indication or "default", **weight}
-
-
-@app.get("/api/graph/recommendations/{drug}")
-async def graph_get_recommendations(drug: str, indication: str = "default"):
-    """Get clinically weighted recommendations for a drug from the graph."""
-    from graph_weights_admin import get_admin
-    admin = get_admin()
-    recs = admin.get_recommendations_for_indication(drug, indication)
+async def get_graph_weight(ingredient: str, indication: str = None):
+    """Get clinical weight for an ingredient."""
+    if not WEIGHTS_AVAILABLE:
+        return {"ingredient": ingredient, "weight": None, "error": "Weights module not available"}
+    
+    weight = get_combined_weight(ingredient, indication)
     return {
-        "drug": drug,
+        "ingredient": ingredient,
         "indication": indication,
-        "recommendations": recs,
-        "source": "neo4j_graph"
+        "weight": weight,
+        "priority": weight_to_priority(weight) if weight else None
     }
-
 
 @app.get("/api/graph/provenance/{ingredient}")
 async def graph_get_provenance(ingredient: str, indication: str = None):
     """Get full provenance for a clinical weight."""
-    from graph_weights_admin import get_admin
+    if not WEIGHTS_AVAILABLE:
+        return {"ingredient": ingredient, "error": "Weights module not available"}
+    
     admin = get_admin()
     weight = admin.get_weight(ingredient, indication)
     if not weight:
@@ -894,183 +1168,74 @@ async def graph_get_provenance(ingredient: str, indication: str = None):
         "source": "neo4j_graph"
     }
 
-# Serve static admin page
-from fastapi.staticfiles import StaticFiles
-import os
-
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.exists(static_dir):
-    app.mount("/admin", StaticFiles(directory=static_dir, html=True), name="admin")
-
-# =============================================================================
-# ADMIN AUTH
-# =============================================================================
-
-import hashlib
-import secrets
-from datetime import datetime, timedelta
-
-# Simple session storage (in production, use Redis)
-ADMIN_SESSIONS = {}
-
-ADMIN_PASSWORD_HASH = hashlib.sha256("Nani*48301".encode()).hexdigest()
-
-@app.post("/api/admin/auth")
-async def admin_auth(request: dict):
-    """Authenticate admin access."""
-    password = request.get("password", "")
-    if hashlib.sha256(password.encode()).hexdigest() == ADMIN_PASSWORD_HASH:
-        token = secrets.token_hex(32)
-        ADMIN_SESSIONS[token] = datetime.now() + timedelta(hours=24)
-        return {"status": "success", "token": token, "expires_in": 86400}
-    raise HTTPException(status_code=401, detail="Invalid password")
-
-@app.post("/api/admin/verify")
-async def admin_verify(token: str):
-    """Verify admin session token."""
-    if token in ADMIN_SESSIONS and ADMIN_SESSIONS[token] > datetime.now():
-        return {"status": "valid"}
-    return {"status": "invalid"}
-
-@app.post("/api/admin/logout")
-async def admin_logout(token: str):
-    """Logout admin session."""
-    if token in ADMIN_SESSIONS:
-        del ADMIN_SESSIONS[token]
-    return {"status": "logged_out"}
-
-# Protect admin endpoints with token verification
-def verify_admin_token(token: str = None):
-    if not token or token not in ADMIN_SESSIONS or ADMIN_SESSIONS[token] < datetime.now():
-        raise HTTPException(status_code=401, detail="Admin authentication required")
-    return True
-
-# =============================================================================
-# CHAT ENDPOINT - Natural Language Query Interface
-# =============================================================================
-
-from pydantic import BaseModel
-from typing import List, Dict, Optional
-
-class ChatRequest(BaseModel):
-    message: str
-    conversation_history: Optional[List[Dict]] = None
-
-class ChatResponse(BaseModel):
-    response: str
-    tool_calls: Optional[List[Dict]] = None
-    drugs_found: Optional[List[Dict]] = None
-
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
-    """Natural language query interface for drug information."""
-    result = await chat_query(request.message, request.conversation_history)
-    return ChatResponse(
-        response=result.get("response", ""),
-        tool_calls=result.get("tool_calls"),
-        drugs_found=result.get("drugs_found")
-    )
-
-# =============================================================================
-# SERVER STARTUP
-# =============================================================================
-
-
-# =============================================================================
-# PHARMACOLOGICAL CLASS ENDPOINTS
-# =============================================================================
-
-@app.get("/api/drug/{drug_id}/classes")
-async def get_drug_classes(drug_id: str):
-    """Get all pharmacological classes a drug belongs to."""
-    # Get drug name first
-    drug = redis_client.get(f"drug:{drug_id}")
-    if not drug:
-        raise HTTPException(status_code=404, detail="Drug not found")
+@app.get("/api/graph/recommendations/{drug}")
+async def get_graph_recommendations(drug: str, indication: str = None, limit: int = 10):
+    """Get clinically-weighted drug recommendations from Neo4j graph."""
+    # First try to find the drug by name
+    drug_lower = drug.lower()
+    drug_id = None
+    set_id = None
     
-    drug_data = json.loads(drug)
-    drug_name = drug_data.get("name", "")
+    for name, drugs in DRUG_SEARCH_INDEX.items():
+        if drug_lower in name:
+            drug_id = drugs[0].get('id')
+            set_id = drugs[0].get('set_id')
+            break
     
-    # Get ingredients and their classes
-    result = neo4j_query("""
-        MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_INGREDIENT_NAME]->(i:Ingredient)
-        MATCH (i)-[:BELONGS_TO]->(c:PharmacologicalClass)
-        RETURN DISTINCT 
-            i.name as ingredient,
-            c.name as class_name
-        ORDER BY i.name, c.name
-    """, {"set_id": drug_id})
+    if not set_id:
+        return {"drug": drug, "recommendations": [], "message": "Drug not found"}
     
-    # Group by ingredient
-    classes_by_ingredient = {}
-    for r in result:
-        ing = r['ingredient']
-        if ing not in classes_by_ingredient:
-            classes_by_ingredient[ing] = []
-        classes_by_ingredient[ing].append(r['class_name'])
+    # Get related drugs from Neo4j
+    query = """
+    MATCH (e:Entity {fda_set_id: $set_id})-[:HAS_NDC]->(ndc:Entity)-[:MAPS_TO_RXCUI]->(cd:ClinicalDrug)-[:CONSTITUTES]->(scc:RxNormConcept)<-[:HAS_INGREDIENT]-(ing:Ingredient)
+    MATCH (other_cd:ClinicalDrug)-[:CONSTITUTES]->(scc)
+    WHERE other_cd <> cd
+    MATCH (other_ing:Ingredient)-[:HAS_INGREDIENT]->(scc)
+    OPTIONAL MATCH (other_ing)-[:HAS_PHARM_CLASS]->(pc:PharmacologicalClass)
+    OPTIONAL MATCH (other_ing)-[:BELONGS_TO_CLASS]->(pc2:PharmacologicalClass)
+    OPTIONAL MATCH (other_cd)<-[:MAPS_TO_RXCUI]-(other_ndc:Entity)<-[:HAS_NDC]-(other_fda:Entity)
+    WITH other_ing, other_cd, other_fda, other_ndc,
+         collect(DISTINCT pc.name) as pharm_classes,
+         collect(DISTINCT pc2.name) as drug_classes
+    RETURN DISTINCT 
+        other_ing.name as ingredient,
+        other_cd.name as clinical_drug,
+        other_fda.name as drug_name,
+        other_fda.fda_set_id as set_id,
+        other_ndc.name as ndc,
+        pharm_classes + drug_classes as classes
+    LIMIT $limit
+    """
     
-    return {
-        "drug_id": drug_id,
-        "drug_name": drug_name,
-        "classes_by_ingredient": classes_by_ingredient,
-        "total_classes": len(set(c for classes in classes_by_ingredient.values() for c in classes))
-    }
-
-@app.get("/api/class/{class_name}/drugs")
-async def get_drugs_in_class(class_name: str, limit: int = 50):
-    """Get all drugs that belong to a pharmacological class. Supports aliases like 'statin', 'antibiotic', etc."""
-    # Expand aliases
-    expanded_class = expand_class_query(class_name)
-    
-    result = neo4j_query("""
-        MATCH (c:PharmacologicalClass)
-        WHERE toLower(c.name) CONTAINS toLower($class_name)
-        MATCH (i:Ingredient)-[:BELONGS_TO]->(c)
-        OPTIONAL MATCH (i)<-[:HAS_INGREDIENT_NAME]-(e:Entity)
-        WITH c, i, count(DISTINCT e) as drug_count
-        RETURN 
-            c.name as class_name,
-            i.name as ingredient,
-            drug_count
-        ORDER BY drug_count DESC
-        LIMIT $limit
-    """, {"class_name": expanded_class, "limit": limit})
-    
-    return {
-        "query": class_name,
-        "expanded_to": expanded_class if expanded_class != class_name else None,
-        "class_name": result[0]["class_name"] if result else expanded_class,
-        "ingredients": [dict(r) for r in result],
-        "total_ingredients": len(result)
-    }
-
-@app.get("/api/classes/search")
-async def search_classes(q: str, limit: int = 20):
-    """Search for pharmacological classes by name. Supports aliases like 'statin', 'antibiotic', etc."""
-    # Expand aliases (e.g., "statin" -> "Hydroxymethylglutaryl-CoA Reductase Inhibitors")
-    expanded_query = expand_class_query(q)
-    
-    result = neo4j_query("""
-        MATCH (c:PharmacologicalClass)
-        WHERE toLower(c.name) CONTAINS toLower($query)
-        OPTIONAL MATCH (i:Ingredient)-[:BELONGS_TO]->(c)
-        WITH c, count(i) as ingredient_count
-        RETURN 
-            c.name as class_name,
-            ingredient_count
-        ORDER BY ingredient_count DESC
-        LIMIT $limit
-    """, {"query": expanded_query, "limit": limit})
-    
-    return {
-        "query": q,
-        "expanded_to": expanded_query if expanded_query != q else None,
-        "classes": [dict(r) for r in result]
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    print("🚀 Starting Pharmaceutical Knowledge Graph API...")
-    print("   API docs: http://localhost:8002/docs")
-    print("   Admin UI: http://localhost:8002/admin")
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    try:
+        results = neo4j_query(query, {"set_id": set_id, "limit": limit})
+        recommendations = []
+        for r in results:
+            rec = {
+                "ingredient": r.get("ingredient"),
+                "clinical_drug": r.get("clinical_drug"),
+                "drug_name": r.get("drug_name"),
+                "set_id": r.get("set_id"),
+                "ndc": r.get("ndc"),
+                "classes": r.get("classes", [])
+            }
+            
+            # Add clinical weight if available
+            if WEIGHTS_AVAILABLE:
+                weight = get_combined_weight(rec["ingredient"], indication)
+                if weight:
+                    rec["clinical_weight"] = weight
+                    rec["clinical_priority"] = weight_to_priority(weight)
+                    prov = get_weight_provenance(rec["ingredient"], indication)
+                    if prov:
+                        rec["weight_provenance"] = prov
+            
+            recommendations.append(rec)
+        
+        return {
+            "drug": drug,
+            "set_id": set_id,
+            "recommendations": recommendations
+        }
+    except Exception as e:
+        return {"drug": drug, "recommendations": [], "error": str(e)}
