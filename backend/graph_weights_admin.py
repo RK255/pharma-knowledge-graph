@@ -389,6 +389,7 @@ class GraphWeightsAdmin:
         """Get all clinically weighted recommendations for a drug given an indication.
         
         Returns ingredients in the same pharmacological class with their clinical weights.
+        Deduplicates by ingredient, keeping the first (highest weight) match.
         """
         with self.driver.session() as session:
             result = session.run("""
@@ -413,18 +414,30 @@ class GraphWeightsAdmin:
                 WITH other, class, weight, expert, evidence
                 WHERE weight IS NOT NULL
                 
+                // Deduplicate by ingredient, keeping highest weight
+                WITH other.name as ingredient_name,
+                     collect(DISTINCT class.name)[0] as shared_class,
+                     max(weight.weight) as clinical_weight,
+                     head(collect(DISTINCT weight.rationale)) as rationale,
+                     head(collect(DISTINCT weight.clinical_note)) as clinical_note,
+                     head(collect(DISTINCT expert.name)) as curator_name,
+                     head(collect(DISTINCT expert.credentials)) as curator_credentials,
+                     head(collect(DISTINCT expert.license)) as curator_license,
+                     head(collect(DISTINCT evidence.name)) as evidence_name,
+                     'expert:graph' as weight_source
+                
                 RETURN 
-                    other.name as ingredient_name,
-                    class.name as shared_class,
-                    weight.weight as clinical_weight,
-                    weight.rationale as rationale,
-                    weight.clinical_note as clinical_note,
-                    expert.name as curator_name,
-                    expert.credentials as curator_credentials,
-                    expert.license as curator_license,
-                    evidence.name as evidence_name,
-                    'expert:graph' as weight_source
-                ORDER BY weight.weight DESC
+                    ingredient_name,
+                    shared_class,
+                    clinical_weight,
+                    rationale,
+                    clinical_note,
+                    curator_name,
+                    curator_credentials,
+                    curator_license,
+                    evidence_name,
+                    weight_source
+                ORDER BY clinical_weight DESC
             """, drug_name=drug_name, indication=indication)
             
             return [dict(record) for record in result]

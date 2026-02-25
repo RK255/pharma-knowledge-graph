@@ -910,3 +910,14 @@ async def chat_endpoint(request: ChatRequest):
         tool_calls=result.get("tool_calls"),
         drugs_found=result.get("drugs_found")
     )
+
+# =============================================================================
+# SERVER STARTUP
+# =============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+    print("🚀 Starting Pharmaceutical Knowledge Graph API...")
+    print("   API docs: http://localhost:8002/docs")
+    print("   Admin UI: http://localhost:8002/admin")
+    uvicorn.run(app, host="0.0.0.0", port=8002)
