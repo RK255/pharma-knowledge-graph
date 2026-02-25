@@ -1,0 +1,174 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-02-24T21:52:13.976090",
+  "curator": {
+    "name": "Kevin G",
+    "credentials": "PharmD",
+    "license": "WA DOH RPH License #PH61629288",
+    "experience": "20+ years clinical pharmacy practice",
+    "specialization": "Ambulatory care, chronic disease management"
+  },
+  "curator_hash": "2edfac9482468448",
+  "disease_states": {
+    "hyperlipidemia": {
+      "name": "Hyperlipidemia",
+      "description": "Elevated cholesterol",
+      "first_line": "Statins",
+      "guidelines": "ACC/AHA 2018"
+    },
+    "cv_risk_reduction": {
+      "name": "CV Risk Reduction",
+      "description": "Secondary prevention",
+      "first_line": "High-intensity statins",
+      "guidelines": "ACC/AHA 2018"
+    },
+    "hypertriglyceridemia": {
+      "name": "Hypertriglyceridemia",
+      "description": "Elevated TG",
+      "first_line": "Fibrates",
+      "guidelines": "ACC/AHA 2018"
+    },
+    "statin_intolerance": {
+      "name": "Statin Intolerance",
+      "description": "Cannot tolerate statins",
+      "first_line": "Ezetimibe",
+      "guidelines": "NLA 2018"
+    }
+  },
+  "drugs": {
+    "atorvastatin": {
+      "default": {
+        "weight": 100,
+        "rationale": "Most potent statin, generic available, extensive outcome data",
+        "evidence": "ACC/AHA 2018 Class I"
+      },
+      "indications": {
+        "hyperlipidemia": {
+          "weight": 100,
+          "rationale": "First-line for LDL reduction"
+        },
+        "cv_risk_reduction": {
+          "weight": 100,
+          "rationale": "High-intensity option"
+        },
+        "hypertriglyceridemia": {
+          "weight": 70,
+          "rationale": "Moderate TG reduction"
+        },
+        "statin_intolerance": {
+          "weight": 40,
+          "rationale": "May try alternate dosing"
+        }
+      },
+      "clinical_note": "Generic (Lipitor). Most potent LDL reduction.",
+      "drug_class": "HMG-CoA Reductase Inhibitor"
+    },
+    "ezetimibe": {
+      "default": {
+        "weight": 80,
+        "rationale": "Well-tolerated, generic, synergistic with statins",
+        "evidence": "IMPROVE-IT, ACC/AHA 2018 Class IIa"
+      },
+      "indications": {
+        "hyperlipidemia": {
+          "weight": 80,
+          "rationale": "Excellent add-on to statins"
+        },
+        "cv_risk_reduction": {
+          "weight": 85,
+          "rationale": "IMPROVE-IT showed added benefit"
+        },
+        "hypertriglyceridemia": {
+          "weight": 30,
+          "rationale": "Minimal effect on TG"
+        },
+        "statin_intolerance": {
+          "weight": 93,
+          "rationale": "Updated via graph admin API"
+        }
+      },
+      "clinical_note": "Generic (Zetia). Excellent add-on or statin alternative.",
+      "drug_class": "Cholesterol Absorption Inhibitor"
+    },
+    "niacin": {
+      "default": {
+        "weight": 15,
+        "rationale": "Limited efficacy, significant side effects, no outcomes benefit",
+        "evidence": "AIM-HIGH, HPS2-THRIVE"
+      },
+      "indications": {
+        "hyperlipidemia": {
+          "weight": 10,
+          "rationale": "Rarely appropriate"
+        },
+        "cv_risk_reduction": {
+          "weight": 5,
+          "rationale": "No outcome benefit, harm possible"
+        },
+        "hypertriglyceridemia": {
+          "weight": 25,
+          "rationale": "May consider for severe hyperTG"
+        },
+        "statin_intolerance": {
+          "weight": 10,
+          "rationale": "Poor tolerability, flushing common"
+        }
+      },
+      "clinical_note": "Rarely appropriate. Flushing, no CV outcome benefit.",
+      "drug_class": "Vitamin B3 / Niacin"
+    },
+    "pitavastatin": {
+      "default": {
+        "weight": 90,
+        "rationale": "Effective statin, minimal CYP interactions, check generic availability",
+        "evidence": "ACC/AHA 2018 Class I"
+      },
+      "indications": {
+        "hyperlipidemia": {
+          "weight": 90,
+          "rationale": "Effective statin option"
+        },
+        "cv_risk_reduction": {
+          "weight": 85,
+          "rationale": "Good for primary prevention"
+        },
+        "hypertriglyceridemia": {
+          "weight": 65,
+          "rationale": "Moderate TG reduction"
+        },
+        "statin_intolerance": {
+          "weight": 55,
+          "rationale": "Minimal CYP interactions, consider for polypharmacy patients"
+        }
+      },
+      "clinical_note": "Check generic availability. Minimal CYP interactions. Good for polypharmacy.",
+      "drug_class": "HMG-CoA Reductase Inhibitor"
+    },
+    "simvastatin": {
+      "default": {
+        "weight": 96,
+        "rationale": "First-line statin, excellent outcomes data - updated via API"
+      },
+      "indications": {
+        "hyperlipidemia": {
+          "weight": 95,
+          "rationale": "First-line option, cost-effective"
+        },
+        "cv_risk_reduction": {
+          "weight": 90,
+          "rationale": "Proven outcomes benefit"
+        },
+        "hypertriglyceridemia": {
+          "weight": 70,
+          "rationale": "Moderate TG reduction"
+        },
+        "statin_intolerance": {
+          "weight": 50,
+          "rationale": "Consider alternate-day dosing"
+        }
+      },
+      "clinical_note": "Generic (Zocor). CYP3A4 substrate - check interactions.",
+      "drug_class": "HMG-CoA Reductase Inhibitor"
+    }
+  }
+}
