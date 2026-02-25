@@ -100,7 +100,7 @@ class PubChemEnricher:
         print("\n--- Extracting IN Nodes from Neo4j ---")
         with self.driver.session(database="neo4j") as session:
             result = session.run("""
-                MATCH (n:Tier1 {primary_tty: 'IN'})
+                MATCH (n:Ingredient {primary_tty: 'IN'})
                 RETURN n.rxcui AS rxcui, n.name AS name, n.provenance_rxnorm AS provenance_rxnorm
             """)
             self.in_nodes = [{"rxcui": record["rxcui"], "name": record["name"], "provenance_rxnorm": record["provenance_rxnorm"]} for record in result]
@@ -310,7 +310,7 @@ class PubChemEnricher:
                 # Update nodes with PubChem CID and provenance
                 query = """
                     UNWIND $nodes AS node
-                    MATCH (n:Tier1 {rxcui: node.rxcui})
+                    MATCH (n:Ingredient {rxcui: node.rxcui})
                     SET n.pubchem_cid = node.pubchem_cid,
                         n.provenance_pubchem = node.pubchem_cid_prov,
                         n.batch_provenance = $batch_prov
