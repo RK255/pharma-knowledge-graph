@@ -10,6 +10,38 @@ from typing import Optional, Dict, List, Any
 from dataclasses import dataclass
 
 # Venice.ai Configuration
+
+import re
+
+def parse_text_tool_call(content: str) -> list:
+    """Parse text-based tool calls like <function=name{args}</function>"""
+    tool_calls = []
+    
+    # Find function calls in the format: <function=name{json}</function>
+    func_match = re.search(r'function=(\w+)\{', content)
+    if func_match:
+        tool_name = func_match.group(1)
+        
+        # Extract the JSON part
+        start = content.find('{')
+        end = content.rfind('}')
+        if start != -1 and end != -1:
+            json_str = content[start:end+1]
+            try:
+                args = json.loads(json_str)
+                tool_calls.append({
+                    "id": f"call_{tool_name}",
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(args)
+                    }
+                })
+            except json.JSONDecodeError:
+                pass
+    
+    return tool_calls
+
 VENICE_API_KEY = os.getenv("VENICE_API_KEY", "VENICE-INFERENCE-KEY-REDACTED")
 VENICE_BASE_URL = "https://api.venice.ai/api/v1"
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b")
@@ -195,10 +227,31 @@ CRITICAL RULES:
 6. NEVER fabricate citations - only use data from tool results
 7. If indication is mentioned, pass it with UNDERSCORE (e.g., "statin_intolerance")
 
+DRUG CLASS QUERIES:
+For questions about drug CLASSES (statins, antibiotics, beta blockers, etc.), use:
+1. search_classes("statin") → finds pharmacological class
+2. get_drugs_in_class("statins") → returns all drugs in that class
+
+The API handles aliases automatically:
+- "statin" → Hydroxymethylglutaryl-CoA Reductase Inhibitors
+- "antibiotic" → Anti-Bacterial Agents
+- "beta blocker" → Adrenergic Beta-Antagonists
+- "ace inhibitor" → Angiotensin-Converting Enzyme Inhibitors
+- etc.
+
+WHEN TO USE WHICH TOOL:
+- "list statins" → search_classes("statin") or get_drugs_in_class("statins")
+- "what drugs are beta blockers?" → get_drugs_in_class("beta blockers")
+- "what class is simvastatin?" → search_drugs("simvastatin") then get_drug_classes(drug_id)
+- "alternatives to simvastatin" → search_drugs("simvastatin") then get_related_drugs(drug_id)
+
 TOOL REFERENCE:
 - drug_id is a hash like "7dbb03eb94c1cc69", NOT a drug name
-- search_drugs: Returns drug_id - call this FIRST
-- get_related_drugs: Takes drug_id, returns weighted alternatives"""
+- search_drugs: Find specific drugs by name
+- search_classes: Find pharmacological classes (supports aliases)
+- get_drugs_in_class: Get all drugs in a class (supports aliases)
+- get_drug_classes: Get classes a drug belongs to
+- get_related_drugs: Get clinically-weighted alternatives"""
 
 def get_tool_definitions() -> List[Dict]:
     """Get tool definitions in OpenAI function calling format."""
@@ -271,7 +324,7 @@ async def execute_tool_call(tool_name: str, arguments: Dict) -> Dict:
     
     # Make the API call
     async with httpx.AsyncClient(timeout=30.0) as client:
-        base_url = "http://localhost:8000"
+        base_url = "http://localhost:8002"
         try:
             response = await client.get(f"{base_url}{endpoint}", params=params)
             
@@ -300,11 +353,24 @@ async def chat_query(user_message: str, conversation_history: List[Dict] = None)
     for iteration in range(max_iterations):
         response = await call_venice(messages, tools)
         
+        # Debug logging
+        print(f"[DEBUG] Response: {response}")
+        
         choice = response.get("choices", [{}])[0]
         message = choice.get("message", {})
+        print(f"[DEBUG] Message: {message}")
         
-        # Check if we have tool calls
-        if message.get("tool_calls"):
+        # Check if we have tool calls (JSON or text format)
+        tool_calls = message.get("tool_calls", [])
+        
+        # Also check for text-based tool calls
+        if not tool_calls and message.get("content"):
+            text_tool_calls = parse_text_tool_call(message["content"])
+            if text_tool_calls:
+                tool_calls = text_tool_calls
+                message["tool_calls"] = tool_calls  # Add to message for proper handling
+        
+        if tool_calls:
             messages.append(message)
             
             for tool_call in message["tool_calls"]:
