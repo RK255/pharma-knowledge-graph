@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """
-NDC Extractor v2
+NDC Extractor v3
 ================
 Extract NDCs from RXNSAT.RRF with proper format normalization.
+Outputs:
+  - ndc_normalized_v2.txt (NDCs with sources)
+  - ndc_to_rxcui.json (NDC → RxCUI mapping for GRC-20 bridge)
+
 Handles: 11-digit, 5-4-2, 5-3-2, 4-4-2 formats
 """
 
 import os
+import json
+from datetime import datetime
 from collections import defaultdict
 
 BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
-RXNSAT_FILE = f"{BASE_DIR}/data/raw_data/extracted_rrf/RxNorm02022026_extracted/rrf/RXNSAT.RRF"
-OUTPUT_FILE = f"{BASE_DIR}/data/raw_data/ndc_normalized_v2.txt"
+RAW_DATA_DIR = f"{BASE_DIR}/data/raw_data"
+EXTRACTED_DIR = f"{RAW_DATA_DIR}/extracted_rrf"
+OUTPUT_DIR = f"{BASE_DIR}/data/raw_data"
 
 def normalize_ndc_to_542(ndc_str: str) -> str:
     """
@@ -57,24 +64,59 @@ def normalize_ndc_to_542(ndc_str: str) -> str:
     # Fallback: return as-is with warning
     return ndc_str.strip()
 
+
+def find_rxnsat_file():
+    """Find the most recent RXNSAT.RRF file."""
+    extracted_dirs = []
+    if os.path.exists(EXTRACTED_DIR):
+        for subdir in sorted(os.listdir(EXTRACTED_DIR), reverse=True):
+            full_path = os.path.join(EXTRACTED_DIR, subdir, "rrf", "RXNSAT.RRF")
+            if os.path.exists(full_path):
+                extracted_dirs.append((subdir, full_path))
+    
+    if not extracted_dirs:
+        raise FileNotFoundError("No RXNSAT.RRF found")
+    
+    print("\nAvailable RXNSAT.RRF files:")
+    for i, (name, path) in enumerate(extracted_dirs, 1):
+        size_mb = os.path.getsize(path) / 1024 / 1024
+        print(f"  [{i}] {name} ({size_mb:.1f} MB)")
+    
+    if len(extracted_dirs) == 1:
+        print(f"\nUsing: {extracted_dirs[0][0]}")
+        return extracted_dirs[0][1]
+    
+    try:
+        choice = int(input(f"\nSelect [1-{len(extracted_dirs)}]: ") or "1")
+        return extracted_dirs[choice - 1][1]
+    except (ValueError, IndexError):
+        return extracted_dirs[0][1]
+
+
 def main():
     print("=" * 70)
-    print("NDC EXTRACTOR v2 - Proper Format Normalization")
+    print("NDC EXTRACTOR v3 - NDC + RxCUI Mapping")
     print("=" * 70)
+    
+    # Find RXNSAT file
+    rxnsat_file = find_rxnsat_file()
     
     # Stats
     stats = defaultdict(int)
-    ndc_data = defaultdict(lambda: {"sources": set(), "rxcuis": set(), "ttys": set()})
+    ndc_data = defaultdict(lambda: {"sources": set(), "rxcuis": set()})
     
-    print(f"\nProcessing: {RXNSAT_FILE}")
+    # Also build reverse mapping for stats
+    rxcui_to_ndcs = defaultdict(set)
     
-    with open(RXNSAT_FILE, 'r') as f:
+    print(f"\nProcessing: {rxnsat_file}")
+    
+    with open(rxnsat_file, 'r') as f:
         for line_num, line in enumerate(f, 1):
             if line_num % 500000 == 0:
                 print(f"  Processed {line_num:,} lines...")
             
             parts = line.strip().split('|')
-            if len(parts) < 12:
+            if len(parts) < 11:
                 continue
             
             # Check for NDC attribute
@@ -82,10 +124,11 @@ def main():
             if attr_type != "NDC":
                 continue
             
+            rxcui = parts[0].strip() if len(parts) > 0 else ""
             source = parts[9] if len(parts) > 9 else ""
             ndc_raw = parts[10] if len(parts) > 10 else ""
             
-            if not ndc_raw:
+            if not ndc_raw or not rxcui:
                 continue
             
             stats[f"source_{source}"] += 1
@@ -96,6 +139,8 @@ def main():
             if ndc_normalized:
                 stats["normalized"] += 1
                 ndc_data[ndc_normalized]["sources"].add(source)
+                ndc_data[ndc_normalized]["rxcuis"].add(rxcui)
+                rxcui_to_ndcs[rxcui].add(ndc_normalized)
             else:
                 stats["failed_normalize"] += 1
     
@@ -107,6 +152,7 @@ def main():
     print(f"Normalized: {stats['normalized']:,}")
     print(f"Failed to normalize: {stats.get('failed_normalize', 0):,}")
     print(f"Unique NDCs: {len(ndc_data):,}")
+    print(f"Unique RxCUIs: {len(rxcui_to_ndcs):,}")
     
     # Count by source combination
     rxnorm_only = sum(1 for d in ndc_data.values() if d["sources"] == {"RXNORM"})
@@ -118,20 +164,63 @@ def main():
     print(f"  MTHSPL only: {mthspl_only:,}")
     print(f"  Both sources: {both:,}")
     
-    # Write normalized NDCs
-    print(f"\nWriting to: {OUTPUT_FILE}")
-    with open(OUTPUT_FILE, 'w') as f:
+    # Output 1: ndc_normalized_v2.txt (NDCs with sources)
+    output_txt = f"{OUTPUT_DIR}/ndc_normalized_v2.txt"
+    print(f"\nWriting: {output_txt}")
+    with open(output_txt, 'w') as f:
         for ndc in sorted(ndc_data.keys()):
             sources = ",".join(sorted(ndc_data[ndc]["sources"]))
             f.write(f"{ndc}\t{sources}\n")
+    print(f"  ✅ Wrote {len(ndc_data):,} NDCs")
     
-    print(f"✅ Wrote {len(ndc_data):,} normalized NDCs")
+    # Output 2: ndc_to_rxcui.json (for GRC-20 bridge)
+    output_json = f"{OUTPUT_DIR}/ndc_to_rxcui.json"
+    print(f"\nWriting: {output_json}")
+    
+    # Build ndc_to_rxcui mapping (convert sets to lists, strings for compatibility)
+    ndc_to_rxcui = {}
+    for ndc, data in ndc_data.items():
+        rxcuis = sorted(data["rxcuis"])
+        # Store as single string if only one RxCUI, else list
+        ndc_to_rxcui[ndc] = rxcuis[0] if len(rxcuis) == 1 else rxcuis
+    
+    # Build reverse mapping for stats
+    rxcui_to_ndcs_list = {rxcui: sorted(ndcs) for rxcui, ndcs in rxcui_to_ndcs.items()}
+    
+    output_data = {
+        "ndc_to_rxcui": ndc_to_rxcui,
+        "rxcui_to_ndcs": rxcui_to_ndcs_list,
+        "stats": {
+            "total_ndcs": len(ndc_data),
+            "total_rxcuis": len(rxcui_to_ndcs),
+            "by_source": {
+                "rxnorm_only": rxnorm_only,
+                "mthspl_only": mthspl_only,
+                "both": both
+            }
+        },
+        "created": datetime.now().isoformat()
+    }
+    
+    with open(output_json, 'w') as f:
+        json.dump(output_data, f, indent=2)
+    
+    size_mb = os.path.getsize(output_json) / 1024 / 1024
+    print(f"  ✅ Wrote {size_mb:.1f} MB")
     
     # Show sample
-    print(f"\nSample NDCs:")
-    for i, (ndc, data) in enumerate(sorted(ndc_data.items())[:10]):
+    print(f"\nSample NDC → RxCUI:")
+    for i, (ndc, data) in enumerate(sorted(ndc_data.items())[:5]):
         sources = ",".join(sorted(data["sources"]))
-        print(f"  {ndc} [{sources}]")
+        rxcuis = ",".join(sorted(data["rxcuis"])[:3])
+        if len(data["rxcuis"]) > 3:
+            rxcuis += "..."
+        print(f"  {ndc} [{sources}] → {rxcuis}")
+    
+    print(f"\n{'='*70}")
+    print("DONE")
+    print(f"{'='*70}")
+
 
 if __name__ == "__main__":
     main()
