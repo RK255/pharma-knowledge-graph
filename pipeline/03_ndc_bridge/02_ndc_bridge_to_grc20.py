@@ -81,7 +81,7 @@ def main():
         date_accessed=datetime.now().strftime("%Y-%m-%d"),
         source_url="https://rxnav.nlm.nih.gov",
     )
-    provenance_id = provenance["entity_id"]
+    provenance_id = provenance["entity"]
     
     entities = [provenance]
     relations = []

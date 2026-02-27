@@ -10,7 +10,9 @@ Outputs:
 Handles: 11-digit, 5-4-2, 5-3-2, 4-4-2 formats
 """
 
+import argparse
 import os
+import argparse
 import json
 from datetime import datetime
 from collections import defaultdict
@@ -65,7 +67,7 @@ def normalize_ndc_to_542(ndc_str: str) -> str:
     return ndc_str.strip()
 
 
-def find_rxnsat_file():
+def find_rxnsat_file(source_date=None):
     """Find the most recent RXNSAT.RRF file."""
     extracted_dirs = []
     if os.path.exists(EXTRACTED_DIR):
@@ -76,6 +78,26 @@ def find_rxnsat_file():
     
     if not extracted_dirs:
         raise FileNotFoundError("No RXNSAT.RRF found")
+    
+    # Auto-select if source_date provided
+    if source_date:
+        # Handle both YYYY-MM-DD and MMDDYYYY formats
+        # source_date like "2026-02-02" should match "RxNorm02022026" (MMDDYYYY)
+        date_parts = source_date.split("-")
+        if len(date_parts) == 3:
+            y, m, d = date_parts
+            mmddyyyy = f"{m}{d}{y}"  # 02022026
+            yyyymmdd = f"{y}{m}{d}"  # 20260202
+        else:
+            mmddyyyy = source_date
+            yyyymmdd = source_date
+        
+        for name, path in extracted_dirs:
+            if mmddyyyy in name or yyyymmdd in name:
+                print(f"\nAuto-selected: {name} (matched source_date: {source_date})")
+                return path
+        print(f"\nWarning: No match for source_date {source_date}, using most recent")
+        return extracted_dirs[0][1]
     
     print("\nAvailable RXNSAT.RRF files:")
     for i, (name, path) in enumerate(extracted_dirs, 1):
@@ -93,13 +115,13 @@ def find_rxnsat_file():
         return extracted_dirs[0][1]
 
 
-def main():
+def main(source_date=None):
     print("=" * 70)
     print("NDC EXTRACTOR v3 - NDC + RxCUI Mapping")
     print("=" * 70)
     
     # Find RXNSAT file
-    rxnsat_file = find_rxnsat_file()
+    rxnsat_file = find_rxnsat_file(source_date=source_date)
     
     # Stats
     stats = defaultdict(int)
@@ -222,5 +244,12 @@ def main():
     print(f"{'='*70}")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Extract NDC codes from RxNorm")
+    parser.add_argument("--source-date", help="Auto-select source with this date (YYYY-MM-DD)")
+    parser.add_argument("--auto", action="store_true", help="Use defaults")
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(source_date=args.source_date)

@@ -188,7 +188,7 @@ class GRC20Merger:
             existing = {self._triple_key(t): t for t in entity.get("triples", [])}
             
             # Add property triples (only schema-supported attributes)
-            supported_attrs = {"smiles", "inchikey", "iupac_name", "pubchem_cid"}
+            supported_attrs = {"smiles", "inchikey", "iupac_name", "pubchem_cid", "mesh_classes"}
             
             for prop_key, value in properties.items():
                 if not value:
@@ -199,10 +199,10 @@ class GRC20Merger:
                     self.stats["properties_skipped"] += 1
                     continue
                 
-                # Create triple with attribute name (will be converted to ID by loader)
+                # Create triple with attribute ID from schema
                 triple = {
                     "entity": entity_id,
-                    "attribute": prop_key,
+                    "attribute": self.schema.attr(prop_key),
                     "value": {"type": 1, "value": str(value)},
                 }
                 
@@ -217,7 +217,7 @@ class GRC20Merger:
             if cid:
                 triple = {
                     "entity": entity_id,
-                    "attribute": "pubchem_cid",
+                    "attribute": self.schema.attr("pubchem_cid"),
                     "value": {"type": 2, "value": int(cid)},  # Type 2 = NUMBER
                 }
                 key = self._triple_key(triple)
@@ -294,6 +294,43 @@ class GRC20Merger:
         print(f"  ✅ Nodes (nouns): {self.stats['nodes']:,}")
         print(f"  ✅ Relations (verbs): {self.stats['relations']:,}")
         
+    def create_pubchem_provenance(self):
+        """Create provenance entity from PubChem metadata."""
+        pubchem_file = DATA_DIR / "pubchem_properties.json"
+        if not pubchem_file.exists():
+            return None
+        
+        with open(pubchem_file, 'r') as f:
+            data = json.load(f)
+        
+        prov_id = data.get("provenance_entity")
+        pubchem_dates = data.get("pubchem_dates", {})
+        
+        if not prov_id:
+            return None
+        
+        # Build citation with file dates
+        files = [f"{k}: {v}" for k, v in pubchem_dates.items()]
+        citation = f"PubChem properties from {', '.join(files)}"
+        
+        # Use the most recent date
+        date = max(pubchem_dates.values()) if pubchem_dates else None
+        
+        provenance = {
+            "entity": prov_id,
+            "triples": [
+                {"entity": prov_id, "attribute": "682Q9VwVWau5NSSgcoNSua", "value": {"type": 1, "value": "Provenance"}},
+                {"entity": prov_id, "attribute": "LuBWqZAu6pz54eiJS5mLv8", "value": {"type": 1, "value": f"PubChem - {date}"}},
+                {"entity": prov_id, "attribute": "BGtnp9KafRjZZLvYp4wqbA", "value": {"type": 1, "value": "PubChem"}},
+                {"entity": prov_id, "attribute": "AsL844sf4oDKGobmcvprpy", "value": {"type": 1, "value": citation}},
+                {"entity": prov_id, "attribute": "24jYhKGVzc3La9UGwsA2i8", "value": {"type": 1, "value": date or "unknown"}},
+                {"entity": prov_id, "attribute": "BKsdqkarj749UsxGXUCSFu", "value": {"type": 1, "value": "https://pubchem.ncbi.nlm.nih.gov"}},
+                {"entity": prov_id, "attribute": "UVEeeZCC8gyivXDN96dtWM", "value": {"type": 1, "value": "IMPORTED"}},
+            ]
+        }
+        
+        return provenance
+
     def export(self, filepath: Path):
         """Export merged entities to GRC-20 JSON."""
         print("\n" + "=" * 70)
@@ -328,6 +365,12 @@ class GRC20Merger:
             "relation_ids": list(self.relation_ids),
             "relationships": self.relationships,
         }
+        
+        # Add PubChem provenance
+        pubchem_prov = self.create_pubchem_provenance()
+        if pubchem_prov:
+            output["entities"].append(pubchem_prov)
+            print(f"  ✅ Added PubChem provenance: {pubchem_prov['entity']}")
         
         with open(filepath, 'w') as f:
             json.dump(output, f, indent=2)

@@ -830,7 +830,7 @@ class PharmaSchema:
         triples.append(self.triple(entity_id, "provenance_type", provenance_type))
         
         return {
-            "entity_id": entity_id,
+            "entity": entity_id,
             "triples": triples,
         }
     

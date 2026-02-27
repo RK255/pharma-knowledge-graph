@@ -631,9 +631,9 @@ class PubChemPropertyFetcher:
             citation=f"PubChem Compound Database, National Center for Biotechnology Information. https://pubchem.ncbi.nlm.nih.gov/",
             date_accessed=datetime.now().strftime("%Y-%m-%d"),
             source_url="https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/",
-            provenance_type="AUTOMATED",
+            provenance_type="IMPORTED",
         )
-        provenance_id = provenance["entity_id"]
+        provenance_id = provenance["entity"]
         
         enriched_cids = {}
         for rxcui, info in self.cid_mapping.items():

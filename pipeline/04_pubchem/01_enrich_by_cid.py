@@ -268,9 +268,9 @@ def export_results(matched, unmatched, source_file, pubchem_date):
         citation=f"PubChem Compound Database, National Center for Biotechnology Information. Release {pubchem_date}. https://pubchem.ncbi.nlm.nih.gov/",
         date_accessed=datetime.now().strftime("%Y-%m-%d"),
         source_url="https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/",
-        provenance_type="AUTOMATED",
+        provenance_type="IMPORTED",
     )
-    provenance_id = provenance["entity_id"]
+    provenance_id = provenance["entity"]
     
     # Build CID mapping
     cid_mapping = {}

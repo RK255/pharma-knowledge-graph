@@ -365,12 +365,12 @@ class RxNormGRC20Converter:
             citation=f"RxNorm Release ({date_str}). National Library of Medicine. https://rxnav.nlm.nih.gov",
             date_accessed=datetime.now().strftime("%Y-%m-%d"),
             source_url="https://rxnav.nlm.nih.gov",
-            provenance_type="AUTOMATED",
+            provenance_type="IMPORTED",
         )
-        self.provenance_id = entity["entity_id"]
+        self.provenance_id = entity["entity"]
         self.entities.append({
             "space": "pharma",
-            "entity": entity["entity_id"],
+            "entity": entity["entity"],
             "triples": entity["triples"],
         })
         print(f"  Created provenance: {self.provenance_id}")
