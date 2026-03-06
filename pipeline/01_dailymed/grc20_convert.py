@@ -1,81 +1,105 @@
-# grc20_converter_final.py
+#!/usr/bin/env python3
+"""
+GRC-20 DailyMed Converter
+Converts DailyMed data to proper GRC-20 format
+"""
+
 import json
 import os
-import uuid
-import base58
 import sys
+from pathlib import Path
 from collections import defaultdict, Counter
 from datetime import datetime
 
-# GRC-20 Specification Constants
+# Import from schema and utils
+sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
+from pharma_schema import PharmaSchema
+
+sys.path.insert(0, str(Path(__file__).parent))
+from grc20_utils import generate_grc20_id, GRC20_VALUE_TYPES
+
+# Initialize schema
+schema = PharmaSchema()
+
+# GRC-20 Specification Constants (from schema)
 GRC20_SPEC = {
-    "value_types": {
-        "TEXT": 1,
-        "NUMBER": 2,
-        "CHECKBOX": 3,
-        "URL": 4,
-        "TIME": 5,
-        "POINT": 6
-    },
+    "value_types": GRC20_VALUE_TYPES,
     "standard_attributes": {
-        "name": "LuBWqZAu6pz54eiJS5mLv8",
-        "type": "Jfmby78N4BCseZinBmdVov",
-        "description": "LA1DqP5v6QAdsgLPXGF3YA",
-        "cover": "7YHk6qYkNDaAtNb8GwmysF",
-        "blocks": "QYbjCM6NT9xmh2hFGsqpQX"
+        "name": schema.attr("name"),
+        "type": schema.attr("type"),
+        "description": schema.attr("description"),
     },
     "standard_types": {
-        "type": "Jfmby78N4BCseZinBmdVov"
+        "type": schema.attr("type")
     }
 }
 
-def generate_grc20_id():
-    """Generate a valid GRC-20 entity ID (22-character Base58)"""
-    # Generate UUID4 (16 bytes)
-    uuid_bytes = uuid.uuid4().bytes
-    # Take first 16 bytes and encode to Base58
-    encoded = base58.b58encode(uuid_bytes).decode()
-    # Ensure we get exactly 22 characters
-    result = encoded[:22]
-    # Double-check the length
-    if len(result) != 22:
-        # If for some reason it's not 22, pad or truncate as needed
-        while len(result) < 22:
-            result += "1"  # Add '1' (valid Base58 character) if too short
-        result = result[:22]  # Truncate if too long
-    return result
-
-# Human-readable attribute mappings - ALL 22 CHARACTERS
+# Attribute mappings from schema
 ATTRIBUTES = {
-    "name": "LuBWqZAu6pz54eiJS5mLv8",
-    "type": "Jfmby78N4BCseZinBmdVov", 
-    "description": "LA1DqP5v6QAdsgLPXGF3YA",
-    "content": "K1sRYSfKJfzc8gYUByrpo6",
-    "section_type": "7YHk6qYkNDaAtNb8GwmysF",
-    "provenance_hash": "WQfdWjboZWFuTseDhG5Cw1",
-    "has_section": "QYbjCM6NT9xmh2hFGsqpQX",
-    "fda_set_id": "CzNrWVPayq5EB1HXncQFD5"
+    "name": schema.attr("name"),
+    "type": schema.attr("type"),
+    "description": schema.attr("description"),
+    "content": schema.attr("content"),
+    "section_type": schema.attr("section_type"),
+    "fda_set_id": schema.attr("fda_set_id"),
+    "effective_time": schema.attr("effective_time"),
+    "set_id": schema.attr("set_id"),
+    "provenance": schema.attr("provenance"),
+    "from_entity": schema.attr("from_entity"),
+    "to_entity": schema.attr("to_entity"),
 }
 
-# Entity type mappings - will be generated dynamically
-ENTITY_TYPES = {}
+# Entity type mappings from schema
+ENTITY_TYPES = {
+    "PackageInsert": schema.type_id("PackageInsert"),
+    "Section": schema.type_id("Section"),
+    "Manufacturer": schema.type_id("Manufacturer"),
+    "Provenance": schema.type_id("Provenance"),
+    "Relation": schema.type_id("Relation"),
+}
+
+# Relation mappings from schema
+RELATIONS = {
+    "has_section": schema.relations.get("has_section"),
+    "section_of": schema.relations.get("section_of"),
+    "manufactured_by": schema.relations.get("manufactured_by"),
+    "manufactures": schema.relations.get("manufactures"),
+}
+
+# Manufacturer deduplication - track by name
+MANUFACTURER_LOOKUP = {}  # name -> entity_id
 
 def create_triple(entity_id, attribute_name, value, value_type="TEXT"):
-    """Create a GRC-20 triple with human-readable mapping"""
+    """Create a GRC-20 triple using schema IDs"""
+    attr_id = ATTRIBUTES.get(attribute_name) or schema.attr(attribute_name)
     return {
         "entity": entity_id,
-        "attribute": ATTRIBUTES.get(attribute_name, generate_grc20_id()),
+        "attribute": attr_id,
         "value": {
-            "type": GRC20_SPEC["value_types"].get(value_type, 1),
+            "type": GRC20_VALUE_TYPES.get(value_type, 1),
             "value": str(value)
         }
     }
 
-def print_progress_bar(current, total, bar_length=50):
-    """Print a clean progress bar"""
+def print_progress_bar(current, total, bar_length=50, progress=None):
+    """Print a clean progress bar and write to progress file"""
+    if total == 0:
+        return
     percent = float(current) * 100 / total
     arrow = '-' * int(percent/100 * bar_length - 1) + '>'
     spaces = ' ' * (bar_length - len(arrow))
+    
+    # Write to progress file for orchestrator
+    try:
+        from pathlib import Path
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from progress import Progress
+        progress = Progress(step_num=1, step_name="DailyMed")
+        progress.report(current / total, f"Converting {current}/{total} documents")
+    except:
+        pass  # Silently fail if progress module not available
+    
     sys.stdout.write('\r')
     sys.stdout.write(f"Progress: [{arrow + spaces}] {percent:.1f}% ({current}/{total})")
     sys.stdout.flush()
@@ -126,7 +150,7 @@ def check_entity_ids_fixed(entities):
             value = triple.get('value', {}).get('value')
             if isinstance(value, str) and len(value) == 22 and value.isalnum():
                 # Only validate as Base58 if this is a has_section attribute
-                if triple.get('attribute') == ATTRIBUTES["has_section"]:
+                if triple.get('attribute') == RELATIONS["has_section"]:
                     if not all(c in '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz' for c in value):
                         issues.append({
                             "entity": entity_id,
@@ -146,19 +170,16 @@ def check_standard_attributes(entities):
     usage_count = defaultdict(int)
     custom_attrs = set()
     
-    # Track which standard attributes are used
+    # Track which standard attributes are used (pharma-specific)
+    # Note: cover/blocks are Geo-specific, not relevant for pharma data
     used_standard = {
         "name": False,
         "type": False,
         "description": False,
-        "cover": False,
-        "blocks": False
+        "has_section": False,  # Our equivalent to blocks
     }
     
-    # Track our equivalents
-    equivalents = {
-        "blocks": "has_section"  # We use has_section instead of blocks
-    }
+    has_section_id = RELATIONS.get("has_section")
     
     for entity in entities:
         for triple in entity.get('triples', []):
@@ -172,13 +193,12 @@ def check_standard_attributes(entities):
                         used_standard[std_name] = True
                         usage_count[attr_id] += 1
                         break
+            # Check for has_section relation (our blocks equivalent)
+            elif attr_id == has_section_id:
+                used_standard["has_section"] = True
+                usage_count[attr_id] += 1
             else:
                 custom_attrs.add(attr_id)
-    
-    # Check for equivalents
-    for std_attr, equiv in equivalents.items():
-        if ATTRIBUTES.get(equiv) in usage_count:
-            used_standard[std_attr] = True
     
     # Calculate compliance score
     used_count = sum(used_standard.values())
@@ -190,7 +210,7 @@ def check_standard_attributes(entities):
 def check_entity_types(entities):
     """Check if entity types are properly defined"""
     issues = []
-    type_entities = set()
+#     type_entities = set()
     type_usage = defaultdict(int)
     
     # Find all entities that define types
@@ -198,21 +218,21 @@ def check_entity_types(entities):
         for triple in entity.get('triples', []):
             if triple.get('attribute') == GRC20_SPEC["standard_attributes"]["type"]:
                 type_value = triple.get('value', {}).get('value')
-                type_entities.add(type_value)
+#                 type_entities.add(type_value)
                 type_usage[type_value] += 1
     
     # Check if there's at least one proper type entity
     has_type_entity = False
     for entity in entities:
         entity_id = entity.get('entity')
-        if entity_id in type_entities:
-            has_type_entity = True
-            break
+#         if entity_id in type_entities:
+        # has_type_entity = True
+        # break
     
     if not has_type_entity:
         issues.append({
             "issue": "No proper type entities found",
-            "fix": "Create entities for your custom types like Drug, Section, etc."
+            "fix": "Create entities for your custom types like PackageInsert, Section, Manufacturer."
         })
     
     return issues, has_type_entity
@@ -288,7 +308,7 @@ def check_compliance_fixed(entities):
         
         if not entity_type_ok:
             print(" 3. Create Proper Type Entities:")
-            print("    - Define Drug, Section, Manufacturer as type entities")
+            print("    - Define PackageInsert, Section, Manufacturer as type entities")
             print("    - Reference these instead of hardcoded IDs")
         
         print("=" * 80)
@@ -301,20 +321,21 @@ def display_sample_entities(output_file):
     print("=" * 80)
     
     with open(output_file, 'r') as f:
-        entities = json.load(f)
+        data = json.load(f)
+        entities = data['entities']  # Get entities from proper GRC-20 structure
     
     # Create reverse mapping for display
     reverse_attrs = {v: k for k, v in ATTRIBUTES.items()}
     
-    # Find a drug entity
+    # Find a PackageInsert entity
     drug_entity = None
     section_entity = None
     
     for entity in entities:
         if entity.get('triples'):
-            # Check if it's a drug entity
+            # Check if it's a PackageInsert entity
             for triple in entity['triples']:
-                if triple.get('attribute') == ATTRIBUTES["type"] and triple.get('value', {}).get('value') == ENTITY_TYPES.get('drug'):
+                if triple.get('attribute') == ATTRIBUTES["type"] and triple.get('value', {}).get('value') == ENTITY_TYPES.get('PackageInsert'):
                     drug_entity = entity
                     break
                 elif triple.get('attribute') == ATTRIBUTES["type"] and triple.get('value', {}).get('value') == ENTITY_TYPES.get('section'):
@@ -324,7 +345,7 @@ def display_sample_entities(output_file):
             if drug_entity and section_entity:
                 break
     
-    # Display drug entity sample
+    # Display PackageInsert entity sample
     if drug_entity:
         print(" SAMPLE DRUG ENTITY:")
         print(f"   Entity ID: {drug_entity['entity']} (length: {len(drug_entity['entity'])})")
@@ -389,53 +410,55 @@ def analyze_pharmaceutical_data(file_path, sample_size=100):
     return {
         'top_level_fields': dict(top_level_fields),
         'section_types': dict(section_types),
-        'total_drugs': len(data)
+        'total_inserts': len(data)
     }
 
-def create_type_entities():
-    """Create proper type entities according to GRC-20 spec"""
-    global ENTITY_TYPES
-    
-    type_entities = []
-    
-    # Drug type entity
-    drug_type_id = generate_grc20_id()
-    ENTITY_TYPES['drug'] = drug_type_id
-    type_entities.append({
-        "space": "pharmaceutical_data",
-        "entity": drug_type_id,
-        "triples": [
-            create_triple(drug_type_id, "name", "Drug"),
-            create_triple(drug_type_id, "type", GRC20_SPEC["standard_types"]["type"])
-        ]
-    })
-    
-    # Section type entity
-    section_type_id = generate_grc20_id()
-    ENTITY_TYPES['section'] = section_type_id
-    type_entities.append({
-        "space": "pharmaceutical_data",
-        "entity": section_type_id,
-        "triples": [
-            create_triple(section_type_id, "name", "Section"),
-            create_triple(section_type_id, "type", GRC20_SPEC["standard_types"]["type"])
-        ]
-    })
-    
-    # Manufacturer type entity
-    manufacturer_type_id = generate_grc20_id()
-    ENTITY_TYPES['manufacturer'] = manufacturer_type_id
-    type_entities.append({
-        "space": "pharmaceutical_data",
-        "entity": manufacturer_type_id,
-        "triples": [
-            create_triple(manufacturer_type_id, "name", "Manufacturer"),
-            create_triple(manufacturer_type_id, "type", GRC20_SPEC["standard_types"]["type"])
-        ]
-    })
-    
-    return type_entities
-
+# def create_type_entities():
+#     """Create type entities using schema-defined IDs.
+#     
+#     Note: Types are defined in PharmaSchema, this creates the type entities
+#     with their name triples for export.
+#     """
+#     type_entities = []
+#     
+#     # PackageInsert type entity
+#     type_entities.append({
+#         "entity": ENTITY_TYPES['PackageInsert'],
+#         "triples": [
+#             create_triple(ENTITY_TYPES['PackageInsert'], "name", "PackageInsert"),
+#             create_triple(ENTITY_TYPES['PackageInsert'], "type", GRC20_SPEC["standard_types"]["type"])
+#         ]
+#     })
+#     
+#     # Section type entity
+#     type_entities.append({
+#         "entity": ENTITY_TYPES['Section'],
+#         "triples": [
+#             create_triple(ENTITY_TYPES['Section'], "name", "Section"),
+#             create_triple(ENTITY_TYPES['Section'], "type", GRC20_SPEC["standard_types"]["type"])
+#         ]
+#     })
+#     
+#     # Manufacturer type entity
+#     type_entities.append({
+#         "entity": ENTITY_TYPES['Manufacturer'],
+#         "triples": [
+#             create_triple(ENTITY_TYPES['Manufacturer'], "name", "Manufacturer"),
+#             create_triple(ENTITY_TYPES['Manufacturer'], "type", GRC20_SPEC["standard_types"]["type"])
+#         ]
+#     })
+#     
+# 
+#     # Add provenance to type entities
+#     for type_entity in type_entities:
+#         type_entity['triples'].append({
+#             'entity': type_entity['entity'],
+#             'attribute': schema.attr('provenance'),
+#             'value': {'type': 1, 'value': provenance_entity['entity']}
+#         })
+# 
+#     return type_entities
+# 
 def extract_description_from_sections(sections):
     """Extract description content from sections"""
     if not sections:
@@ -453,79 +476,151 @@ def extract_description_from_sections(sections):
     
     return None
 
-def convert_drug_to_grc20(drug_data, analysis_results):
-    """Convert a single parent insert from your current format to GRC-20"""
-    drug_id = generate_grc20_id()
+def get_or_create_manufacturer(manufacturer_name):
+    """Get existing manufacturer ID or create new one. Deduplicates by name."""
+    global MANUFACTURER_LOOKUP
     
-    # Create the main drug entity with clear triples
-    drug_triples = [
-        create_triple(drug_id, "name", drug_data.get('title', '')),
-        create_triple(drug_id, "type", ENTITY_TYPES['drug'])
+    if not manufacturer_name:
+        return None
+    
+    # Normalize name for deduplication
+    normalized = manufacturer_name.strip().lower()
+    
+    if normalized in MANUFACTURER_LOOKUP:
+        return MANUFACTURER_LOOKUP[normalized]
+    
+    # Create new manufacturer entity
+    mfr_id = generate_grc20_id()
+    MANUFACTURER_LOOKUP[normalized] = mfr_id
+    return mfr_id
+
+def convert_package_insert_to_grc20(insert_data, analysis_results, provenance_id):
+    """Convert a single package insert to GRC-20 format.
+    
+    Creates:
+    - PackageInsert entity with metadata
+    - Section entities for each section
+    - Manufacturer entity (deduplicated by name)
+    - Links sections to package insert via has_section relation
+    - Links to manufacturer via manufactured_by relation
+    """
+    insert_id = generate_grc20_id()
+    
+    # Create the main PackageInsert entity
+    insert_triples = [
+        create_triple(insert_id, "name", insert_data.get('title', '')),
+        create_triple(insert_id, "type", ENTITY_TYPES['PackageInsert'])
     ]
     
-    # Extract description from sections and add it
-    description = extract_description_from_sections(drug_data.get('sections', []))
+    # Extract description from sections
+    description = extract_description_from_sections(insert_data.get('sections', []))
     if description:
-        drug_triples.append(create_triple(drug_id, "description", description[:500]))  # Limit to 500 chars
+        insert_triples.append(create_triple(insert_id, "description", description[:500]))
     
-    # Add FDA-specific attributes with proper types
-    if 'fda_set_id' in drug_data:
-        drug_triples.append(create_triple(drug_id, "fda_set_id", drug_data['fda_set_id']))
+    # Add FDA-specific attributes
+    if 'fda_set_id' in insert_data:
+        insert_triples.append(create_triple(insert_id, "fda_set_id", insert_data['fda_set_id']))
     
-    if 'effective_time' in drug_data:
-        drug_triples.append(create_triple(drug_id, "effective_time", drug_data['effective_time'], "TIME"))
+    if 'set_id' in insert_data:
+        insert_triples.append(create_triple(insert_id, "set_id", insert_data['set_id']))
     
-    if 'manufacturer' in drug_data:
-        drug_triples.append(create_triple(drug_id, "manufacturer", drug_data['manufacturer']))
+    if 'effective_time' in insert_data:
+        insert_triples.append(create_triple(insert_id, "effective_time", insert_data['effective_time'], "TIME"))
     
-    if 'provenance_hash' in drug_data:
-        drug_triples.append(create_triple(drug_id, "provenance_hash", drug_data['provenance_hash']))
+    # Add provenance link
+    insert_triples.append(create_triple(insert_id, "provenance", provenance_id))
+    # Handle manufacturer as entity relation
+    manufacturer_entity = None
+    manufactured_by_rel_entity = None
+    manufacturer_name = insert_data.get('manufacturer')
+    if manufacturer_name:
+        mfr_id = get_or_create_manufacturer(manufacturer_name)
+        
+        # Create manufactured_by relation entity
+        manufactured_by_rel_id = generate_grc20_id()
+        manufactured_by_rel_entity = {
+            "entity": manufactured_by_rel_id,
+            "triples": [
+                # Type attributes for relation
+                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": ENTITY_TYPES['Relation']}},
+                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": RELATIONS["manufactured_by"]}},
+                # from and to
+                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES.get("from_entity") or schema.attr("from_entity"), "value": {"type": 1, "value": insert_id}},
+                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES.get("to_entity") or schema.attr("to_entity"), "value": {"type": 1, "value": mfr_id}},
+                # Provenance
+                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES["provenance"], "value": {"type": 1, "value": provenance_id}},
+            ]
+        }
+        
+        manufacturer_entity = {
+            "entity": mfr_id,
+            "triples": [
+                create_triple(mfr_id, "name", manufacturer_name),
+                create_triple(mfr_id, "type", ENTITY_TYPES['Manufacturer']),
+                create_triple(mfr_id, "provenance", provenance_id)
+            ]
+        }
+    
     
     # Convert sections to separate entities
     section_entities = []
-    for section in drug_data.get('sections', []):
+    for section in insert_data.get('sections', []):
         section_id = generate_grc20_id()
-        section_type = section.get('section_type', 'OTHER')
+        section_type_name = section.get('section_type', 'OTHER')
         
-        # Link section to drug
-        drug_triples.append({
-            "entity": drug_id,
-            "attribute": ATTRIBUTES["has_section"],
-            "value": {
-                "type": GRC20_SPEC["value_types"]["TEXT"],
-                "value": section_id
-            }
-        })
+        # Create has_section relation entity
+        has_section_rel_id = generate_grc20_id()
+        has_section_rel_entity = {
+            "entity": has_section_rel_id,
+            "triples": [
+                # Type attributes for relation
+                {"entity": has_section_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": ENTITY_TYPES['Relation']}},
+                {"entity": has_section_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": RELATIONS["has_section"]}},
+                # from and to
+                {"entity": has_section_rel_id, "attribute": ATTRIBUTES.get("from_entity") or schema.attr("from_entity"), "value": {"type": 1, "value": insert_id}},
+                {"entity": has_section_rel_id, "attribute": ATTRIBUTES.get("to_entity") or schema.attr("to_entity"), "value": {"type": 1, "value": section_id}},
+                # Provenance
+                {"entity": has_section_rel_id, "attribute": ATTRIBUTES["provenance"], "value": {"type": 1, "value": provenance_id}},
+            ]
+        }
+        section_entities.append(has_section_rel_entity)
         
-        # Create section entity with clear structure
+        # Create section entity
         section_triples = [
             create_triple(section_id, "name", section.get('title', '')),
-            create_triple(section_id, "type", ENTITY_TYPES['section']),
-            create_triple(section_id, "section_type", section_type),
-            create_triple(section_id, "provenance_hash", section.get('provenance_hash', ''))
+            create_triple(section_id, "type", ENTITY_TYPES['Section']),
+            create_triple(section_id, "section_type", section_type_name),
         ]
         
         # Add content if it exists
         if 'content' in section:
             section_triples.append(create_triple(section_id, "content", section['content']))
         
+        # Add provenance link
+        section_triples.append(create_triple(section_id, "provenance", provenance_id))
+        
         section_entity = {
-            "space": "pharmaceutical_data",
             "entity": section_id,
             "triples": section_triples
         }
         section_entities.append(section_entity)
     
-    # Create the main drug entity
-    drug_entity = {
-        "space": "pharmaceutical_data",
-        "entity": drug_id,
-        "triples": drug_triples
+    # Create the main PackageInsert entity
+    insert_entity = {
+        "entity": insert_id,
+        "triples": insert_triples
     }
     
-    return drug_entity, section_entities
+    # Combine: insert_entity, section_entities (includes relations), manufacturer_entity, relation_entity
+    all_entities = [insert_entity] + section_entities
+    if manufacturer_entity:
+        all_entities.append(manufacturer_entity)
+    if manufactured_by_rel_entity:
+        all_entities.append(manufactured_by_rel_entity)
+    
+    return all_entities  # Return list of all entities created
 
-def convert_dataset_to_grc20(input_file, output_file):
+def convert_dataset_to_grc20(input_file, output_file, progress=None):
     """Convert the entire dataset to GRC-20 format with clean progress reporting"""
     print("=" * 80)
     print("PHARMACEUTICAL KNOWLEDGE GRAPH - GRC-20 CONVERSION")
@@ -539,7 +634,7 @@ def convert_dataset_to_grc20(input_file, output_file):
     analysis = analyze_pharmaceutical_data(input_file)
     
     print(f"\n DATASET ANALYSIS:")
-    print(f"   • Found {analysis['total_drugs']:,} parent inserts")
+    print(f"   • Found {analysis['total_inserts']:,} parent inserts")
     print(f"   • Top-level fields: {len(analysis['top_level_fields'])} fields")
     print(f"   • Section types: {len(analysis['section_types'])} types")
     
@@ -551,59 +646,117 @@ def convert_dataset_to_grc20(input_file, output_file):
     top_sections = sorted(analysis['section_types'].items(), key=lambda x: x[1], reverse=True)[:5]
     print(f"   • Top sections: {', '.join([s[0] for s in top_sections])}")
     
+    # Create provenance entity for FDA SPL source
+    print("\n" + "=" * 80)
+    print("CREATING PROVENANCE")
+    print("=" * 80)
+    
+    provenance_entity = schema.create_provenance(
+        source="FDA SPL - DailyMed",
+        citation="DailyMed Package Insert Data, U.S. Food and Drug Administration. https://dailymed.nlm.nih.gov/",
+        date_accessed=datetime.now().strftime("%Y-%m-%d"),
+        source_url="https://dailymed.nlm.nih.gov/dailymed/about.cfm",
+        provenance_type="IMPORTED",
+    )
+    provenance_id = provenance_entity["entity"]
+    print(f"  Created provenance: {provenance_id}")
+    
     print("\n" + "=" * 80)
     print("CONVERSION PROGRESS:")
     print("=" * 80)
     
     # Create type entities first
-    type_entities = create_type_entities()
-    print(f"Created {len(type_entities)} type entities")
+#     type_entities = create_type_entities()
+#     print(f"Created {len(type_entities)} type entities")
+    
+    # Create provenance entity
+    provenance_entity = schema.create_provenance(
+        source="FDA SPL - DailyMed",
+        citation="DailyMed Package Insert Data, U.S. Food and Drug Administration. https://dailymed.nlm.nih.gov/",
+        date_accessed=datetime.now().strftime("%Y-%m-%d"),
+        source_url="https://dailymed.nlm.nih.gov/dailymed/about.cfm",
+        provenance_type="IMPORTED",
+    )
+    provenance_id = provenance_entity["entity"]
+    print(f"  Created provenance: {provenance_id}")
     
     # Load the full dataset
     with open(input_file, 'r') as f:
         parent_inserts = json.load(f)
     
     # Convert to GRC-20
-    grc20_entities = type_entities.copy()  # Start with type entities
+    grc20_entities = []  # No type entities
+    grc20_entities.append(provenance_entity)  # Add provenance entity
     processed_count = 0
     section_count = 0
     description_count = 0
     
+    manufacturer_entities = {}  # Track unique manufacturers
+    
     for parent_insert in parent_inserts:
-        drug_entity, section_entities = convert_drug_to_grc20(parent_insert, analysis)
-        grc20_entities.append(drug_entity)
-        grc20_entities.extend(section_entities)
-        section_count += len(section_entities)
+        # convert_package_insert_to_grc20 returns a list of all entities
+        created_entities = convert_package_insert_to_grc20(parent_insert, analysis, provenance_id)
+        # Find the PackageInsert entity for description checking
+        insert_entity = None
+        for entity in created_entities:
+            for triple in entity.get("triples", []):
+                if triple.get("attribute") == ATTRIBUTES["type"] and triple.get("value", {}).get("value") == ENTITY_TYPES["PackageInsert"]:
+                    insert_entity = entity
+                    break
         
-        # Count how many drugs have descriptions
-        for triple in drug_entity['triples']:
-            if triple.get('attribute') == ATTRIBUTES['description']:
-                description_count += 1
-                break
+        
+        for entity in created_entities:
+            grc20_entities.append(entity)
+            
+            # Track manufacturer for deduplication
+            triples = entity.get('triples', [])
+            for triple in triples:
+                if triple.get('attribute') == ATTRIBUTES["type"]:
+                    type_val = triple.get('value', {}).get('value')
+                    if type_val == ENTITY_TYPES['Manufacturer']:
+                        mfr_id = entity['entity']
+                        if mfr_id not in manufacturer_entities:
+                            manufacturer_entities[mfr_id] = entity
+                    elif type_val == ENTITY_TYPES['Section']:
+                        section_count += 1
+        
+        # Count how many inserts have descriptions
+        if insert_entity:
+            for triple in insert_entity['triples']:
+                if triple.get('attribute') == ATTRIBUTES['description']:
+                    description_count += 1
+                    break
+            
         
         processed_count += 1
         
         # Update progress bar every 100 inserts
         if processed_count % 100 == 0:
-            print_progress_bar(processed_count, len(parent_inserts))
+            print_progress_bar(processed_count, len(parent_inserts), progress=progress)
     
     # Complete the progress bar
-    print_progress_bar(len(parent_inserts), len(parent_inserts))
+    print_progress_bar(len(parent_inserts), len(parent_inserts), progress=progress)
     print("\n")
+    
+    # Create proper GRC-20 structure with entities wrapper
+    grc20_data = {
+        'entities': grc20_entities
+    }
     
     # Save the converted data
     with open(output_file, 'w') as f:
-        json.dump(grc20_entities, f, indent=2)
+        json.dump(grc20_data, f, indent=2)
     
     print("=" * 80)
     print(" CONVERSION COMPLETE")
     print("=" * 80)
     print(f" RESULTS:")
     print(f"   • Parent inserts processed: {len(parent_inserts):,}")
-    print(f"   • Type entities created: {len(type_entities)}")
-    print(f"   • Drug entities created: {len(parent_inserts):,}")
+    print(f"   • Type entities created: {0}")
+    print(f"   • PackageInsert entities created: {len(parent_inserts):,}")
+    print(f"   • Manufacturer entities created: {len(manufacturer_entities):,}")
     print(f"   • Section entities created: {section_count:,}")
-    print(f"   • Drugs with descriptions: {description_count:,}")
+    print(f"   • Inserts with descriptions: {description_count:,}")
     print(f"   • Total GRC-20 entities: {len(grc20_entities):,}")
     print(f"   • Average sections per insert: {section_count/len(parent_inserts):.1f}")
     print(f"   • Output file: {output_file}")
@@ -623,10 +776,13 @@ def convert_dataset_to_grc20(input_file, output_file):
     return grc20_entities, scores, overall_score
 
 if __name__ == "__main__":
-    # Set up file paths
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    input_file = os.path.join(base_dir, "output", "enhanced_chunked_documents.json")
-    output_file = os.path.join(base_dir, "output", "grc20_pharmaceutical_data_final_corrected.json")
+    # Set up file paths - output to data/grc20_v2
+    # scripts/production/pipeline/01_dailymed -> project root (5 parents)
+    base_dir = Path(__file__).parent.parent.parent.parent.parent / "data" / "grc20_v2"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    input_file = base_dir / "dailymed_documents.json"
+    output_file = base_dir / "dailymed_entities.json"
     
     # Run the conversion
-    convert_dataset_to_grc20(input_file, output_file)
+    convert_dataset_to_grc20(str(input_file), str(output_file))

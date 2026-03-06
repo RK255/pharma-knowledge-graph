@@ -44,7 +44,9 @@ import argparse
 
 # Add schema path
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..', '00_schema')))
+sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..')))
 from pharma_schema import PharmaSchema, generate_grc20_id
+from shared_state import save_source_selection
 
 # =============================================================================
 # CONFIGURATION
@@ -293,6 +295,8 @@ class RxNormGRC20Converter:
         if source_type == 'extracted':
             self.selected_extract_dir = os.path.join(EXTRACTED_DIR, source_name)
             print(f"\nUsing extracted data: {source_name}")
+            # Save selection for subsequent steps
+            save_source_selection(source_name, self.selected_extract_dir)
         else:
             print(f"\nExtracting {source_name}...")
             self.selected_extract_dir = self.extract_zip(source_name)
@@ -527,7 +531,7 @@ class RxNormGRC20Converter:
             if self.provenance_id:
                 entity["triples"].append({
                     "entity": entity_id,
-                    "attribute": self.schema.rel("has_provenance"),
+                    "attribute": self.schema.attr("provenance"),
                     "value": {"type": 1, "value": self.provenance_id},
                 })
             
@@ -575,6 +579,16 @@ class RxNormGRC20Converter:
                 relation_type=rel_type,
                 to_entity=target_id,
             )
+            
+            # FIX: Attach provenance to the relation entity itself
+            # This ensures Relations are counted in provenance statistics
+            relation_entity_id = relation_triples[0]["entity"]
+            if self.provenance_id:
+                relation_triples.append({
+                    "entity": relation_entity_id,
+                    "attribute": self.schema.attr("provenance"),
+                    "value": {"type": 1, "value": self.provenance_id},
+                })
             
             self.relations.append({
                 "space": "pharma",

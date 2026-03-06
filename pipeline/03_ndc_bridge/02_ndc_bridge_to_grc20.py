@@ -59,6 +59,19 @@ def main():
     with open(RXNORM_ENTITIES_FILE, 'r') as f:
         rxnorm_data = json.load(f)
     
+
+        # Build dictionary indexed by RxCUI for fast lookup
+        rxnorm_dict = {}
+        for entity in rxnorm_data:
+            # Get the RxCUI from the entity (stored in the entity_id field)
+            if "triples" in entity:
+                for triple in entity["triples"]:
+                    if triple.get("attribute") == "LuBWqZAu6pz54eiJS5mLv8":  # RxCUI attribute ID
+                        rxcui = triple.get("value")
+                        if rxcui:
+                            rxnorm_dict[rxcui] = entity
+                            break
+
     rxcui_attr = schema.attr("rxcui")
     rxcui_to_entity = {}
     for entity in rxnorm_data.get("entities", []):
@@ -99,7 +112,7 @@ def main():
         entity["triples"].append(schema.triple(entity_id, "ndc_code", ndc))
         entity["triples"].append({
             "entity": entity_id,
-            "attribute": schema.rel("has_provenance"),
+            "attribute": schema.attr("provenance"),
             "value": {"type": 1, "value": provenance_id},
         })
         
@@ -112,6 +125,14 @@ def main():
             rx_entity = rxcui_to_entity.get(rxcui)
             if rx_entity:
                 rel = schema.relation(entity_id, "maps_to_rxcui", rx_entity)
+                
+                # Attach provenance to the relation entity
+                rel.append({
+                    "entity": rel[0]["entity"],
+                    "attribute": schema.attr("provenance"),
+                    "value": {"type": 1, "value": provenance_id},
+                })
+                
                 relations.append({"space": "pharma", "entity": rel[0]["entity"], "triples": rel})
                 stats["relations"] += 1
                 linked = True

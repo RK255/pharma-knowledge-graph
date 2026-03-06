@@ -639,9 +639,10 @@ class PubChemPropertyFetcher:
         for rxcui, info in self.cid_mapping.items():
             enriched_cids[rxcui] = {
                 'cid': info['cid'],
-                'entity_id': info['entity_id'],
+                # FIX: Removed 'entity_id' to prevent stale ID mismatch. 
+                # The merge script must use RxCUI to locate the node.
                 'name': info['name'],
-                'match_type': info['match_type'],
+                'match_type': info.get('match_type', 'unknown'),
                 'properties': {}
             }
         
@@ -664,10 +665,19 @@ class PubChemPropertyFetcher:
             "source": os.path.basename(self.mapping_file),
             "pubchem_dates": self.pubchem_dates,
             "provenance_entity": provenance_id,
+            "provenance_entity_definition": provenance,
             "cid_mapping_provenance": self.mapping_provenance,
             "selected_properties": self.selected_options,
             "stats": stats,
             "enriched_cids": enriched_cids,
+            # FIX: Add standard 'entities' array so Merge script picks up the Provenance Entity automatically
+            "entities": [
+                {
+                    "space": "pharma",
+                    "entity": provenance["entity"],
+                    "triples": provenance["triples"]
+                }
+            ]
         }
         
         output_file = os.path.join(OUTPUT_DIR, "pubchem_properties.json")

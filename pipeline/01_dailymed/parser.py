@@ -324,7 +324,7 @@ SECTION_TO_RELATIONSHIP_MAP = {
 # --- END SECTION TO RELATIONSHIP MAPPING ---
 
 # --- NEW: Progress Tracking Function ---
-def update_progress(current, total, start_time):
+def update_progress(current, total, start_time, progress=None):
     """Update and display progress information."""
     percent = (current / total) * 100
     elapsed = time.time() - start_time
@@ -333,6 +333,10 @@ def update_progress(current, total, start_time):
         eta_str = f"{eta/60:.1f} min" if eta > 60 else f"{eta:.1f} sec"
     else:
         eta_str = "calculating..."
+    
+    # Write to progress file if progress object provided
+    if progress:
+        progress.report(current / total, f"Processing {current}/{total} XML files")
     
     sys.stdout.write(f"\rProgress: {current}/{total} ({percent:.1f}%) - Elapsed: {elapsed/60:.1f} min - ETA: {eta_str}")
     sys.stdout.flush()
@@ -833,7 +837,7 @@ def create_knowledge_graph(documents: List[Dict[str, Any]], prov_manager: Proven
             logger.error(f"Error creating KG for doc {doc.get('file_path', 'unknown')}: {str(e)}")
     return {'nodes': nodes, 'relationships': relationships}
 
-def process_xml_files(xml_dir: str, limit: Optional[int] = None, output_dir: str = 'output') -> Dict[str, Any]:
+def process_xml_files(xml_dir: str, limit: Optional[int] = None, output_dir: str = 'output', progress=None) -> Dict[str, Any]:
     """Process XML files and extract drug information using FDA SPL identifiers."""
     xml_path = Path(xml_dir)
     ledger_file = os.path.join(output_dir, 'provenance_ledger.json')
@@ -959,7 +963,7 @@ def process_xml_files(xml_dir: str, limit: Optional[int] = None, output_dir: str
                 application_type_counts[app_type] += 1
             
             # NEW: Update progress
-            update_progress(i+1, len(xml_files), start_time)
+            update_progress(i+1, len(xml_files), start_time, progress)
                 
         except Exception as e:
             logger.error(f"Error processing {xml_file}: {str(e)}")
@@ -1029,12 +1033,18 @@ def verify_counts(documents: List[Dict[str, Any]], reported_counts: Dict[str, in
 def main():
     parser = argparse.ArgumentParser(description='Process DailyMed XML files and build a drug knowledge graph.')
     parser.add_argument('--xml-dir', required=True, help='Directory containing XML files')
-    parser.add_argument('--output-dir', default='output', help='Output directory for processed data')
+    parser.add_argument('--output-dir', default=None, help='Output directory for processed data (default: data/grc20_v2)')
     parser.add_argument('--limit', type=int, help='Limit the number of files to process')
     args = parser.parse_args()
     
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(exist_ok=True)
+    # Default output to data/grc20_v2
+    if args.output_dir is None:
+        # scripts/production/pipeline/01_dailymed -> project root (5 parents)
+        base_dir = Path(__file__).parent.parent.parent.parent.parent
+        output_dir = base_dir / "data" / "grc20_v2"
+    else:
+        output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     result = process_xml_files(args.xml_dir, args.limit, str(output_dir))
     
@@ -1043,7 +1053,7 @@ def main():
     if not is_valid:
         logger.error("CRITICAL: Self-verification failed. The reported counts may be inaccurate.")
     
-    with open(output_dir / 'enhanced_chunked_documents.json', 'w') as f:
+    with open(output_dir / 'dailymed_documents.json', 'w') as f:
         json.dump(result['documents'], f, indent=2)
     with open(output_dir / 'enhanced_kg_chunks.json', 'w') as f:
         json.dump(result['knowledge_graph'], f, indent=2)
