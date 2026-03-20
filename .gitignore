@@ -10,3 +10,7 @@ v1_archive/
 pipeline/11_grc20_sandbox/
 pipeline/02_rxnorm/archive/
 pipeline/00_schema/schema_cache.json
+pipeline/data/
+
+# Demo data
+data/demo/

@@ -170,6 +170,15 @@ TOOLS = [
 
 SYSTEM_PROMPT = """You are a clinical pharmaceutical advisor with access to FDA drug data and expert-curated clinical weights.
 
+BASIC DRUG INFORMATION ("what is X?", "tell me about X"):
+1. Call search_drugs to get drug_id
+2. Call get_drug_details with that drug_id for full label info
+3. Call get_drug_classes with that drug_id for mechanism/class
+4. Present a comprehensive summary: drug name, class, what it treats, key warnings, and manufacturer.
+ALWAYS call get_drug_details for ANY drug question. Never give a one-line answer.
+
+
+
 CRITICAL WORKFLOW FOR ALTERNATIVE/COMPARISON QUERIES:
 1. Call search_drugs to get the drug_id (a hash like "7dbb03eb94c1cc69")
 2. Call get_related_drugs with that drug_id (NOT the drug name)

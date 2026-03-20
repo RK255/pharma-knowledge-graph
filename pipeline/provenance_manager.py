@@ -1,244 +1,205 @@
 """
-Provenance Manager for GRC-20 Pipeline
-Ensures all entities have provenance tracking.
+Provenance Manager for GRC-20 Pipeline (v2)
+Ensures all entities have provenance tracking via has_provenance relations.
 """
 import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
-# Import schema for attribute IDs
 import sys
 sys.path.insert(0, str(Path(__file__).parent / "00_schema"))
-from pharma_schema import PharmaSchema, GRC20_SYSTEM_TYPES
+from pharma_schema import PharmaSchema, PROVENANCE_SOURCES, generate_uuid
 
 
 class ProvenanceManager:
-    """Manages provenance entities and coverage validation."""
+    """Manages provenance entities and coverage validation for GRC-20 format."""
+    
+    # GRC-20 standard IDs
+    HAS_PROVENANCE_REL_ID = "40336b51fbf358408ee0cbcc808d43b6"
+    PROVENANCE_TYPE_ID = "bf18230767f55134938b218f276a8582"
     
     def __init__(self, base_dir: str = None):
-        self.base_dir = Path(base_dir) if base_dir else Path(__file__).parent
+        self.base_dir = Path(base_dir) if base_dir else Path(__file__).parent.parent.parent / "data" / "grc20_v2"
         self.schema = PharmaSchema()
+        
+        # Property IDs
+        self.prop_name = self.schema.prop("name")
+        self.prop_source = self.schema.prop("source")
+        self.prop_citation = self.schema.prop("citation")
+        self.prop_date_accessed = self.schema.prop("date_accessed")
+        self.prop_source_url = self.schema.prop("source_url")
+        self.prop_provenance_type = self.schema.prop("provenance_type")
+        
+        # Track provenance entities
         self.provenance_entities: Dict[str, dict] = {}
-        
-        # Attribute IDs from schema
-        self.attr_provenance = self.schema.attr("provenance")
-        self.attr_name = self.schema.attr("name")
-        self.attr_source = self.schema.attr("source")
-        self.attr_citation = self.schema.attr("citation")
-        self.attr_date_accessed = self.schema.attr("date_accessed")
-        self.attr_provenance_type = self.schema.attr("provenance_type")
-        self.attr_type = self.schema.attr("type")
-        
-        # Type IDs
-        self.type_provenance = self.schema.types.get("Provenance")
-        
-        # GRC-20 System Types (meta-types for schema definitions)
-        self.meta_types = [
-            GRC20_SYSTEM_TYPES['Type'],
-            GRC20_SYSTEM_TYPES['Attribute'],
-            GRC20_SYSTEM_TYPES['Relation'],
-            GRC20_SYSTEM_TYPES['RelationType'],
-        ]
     
-    def load_data(self, filepath: str) -> dict:
-        """Load full JSON data structure."""
+    def load_entities_jsonl(self, filepath: str) -> List[dict]:
+        """Load entities from JSONL file."""
+        entities = []
         with open(filepath, 'r') as f:
-            return json.load(f)
+            for line in f:
+                if line.strip():
+                    entities.append(json.loads(line))
+        return entities
     
-    def load_entities(self, filepath: str) -> List[dict]:
-        """Load entities array from JSON file."""
-        data = self.load_data(filepath)
-        return data.get("entities", [])
+    def load_relations_jsonl(self, filepath: str) -> List[dict]:
+        """Load relations from JSONL file."""
+        relations = []
+        with open(filepath, 'r') as f:
+            for line in f:
+                if line.strip():
+                    relations.append(json.loads(line))
+        return relations
     
-    def save_data(self, data: dict, filepath: str):
-        """Save full JSON data structure."""
+    def save_entities_jsonl(self, entities: List[dict], filepath: str):
+        """Save entities to JSONL file."""
         with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
+            for entity in entities:
+                f.write(json.dumps(entity) + '\n')
     
-    def _get_entity_type_id(self, entity: dict) -> Optional[str]:
-        """Get the type ID of an entity."""
-        for triple in entity.get("triples", []):
-            if triple.get("attribute") == self.attr_type:
-                value = triple.get("value", {})
-                if isinstance(value, dict):
-                    return value.get("value")
-                return value
-        return None
-    
-    def get_coverage_stats(self, entities: List[dict]) -> Dict[str, Any]:
-        """Calculate provenance coverage statistics."""
-        total = len(entities)
-        with_provenance = 0
-        without_provenance = []
-        skipped_types = {"meta": 0, "provenance": 0}
-        
-        for entity in entities:
-            entity_id = entity.get("entity", "")
-            entity_type = self._get_entity_type_id(entity)
-            
-            # Skip type definition entities (meta-types for schema)
-            if entity_type in self.meta_types:
-                skipped_types["meta"] += 1
-                with_provenance += 1
-                continue
-            
-            # Skip Provenance entities (they ARE provenance, don't need it)
-            if entity_type == self.type_provenance:
-                skipped_types["provenance"] += 1
-                with_provenance += 1
-                continue
-            
-            # Check for provenance triple
-            has_prov = False
-            for triple in entity.get("triples", []):
-                attr = triple.get("attribute", "")
-                if attr == self.attr_provenance:
-                    has_prov = True
-                    break
-            
-            if has_prov:
-                with_provenance += 1
-            else:
-                without_provenance.append(entity_id)
-        
-        coverage = (with_provenance / total * 100) if total > 0 else 100
-        
-        return {
-            "total": total,
-            "with_provenance": with_provenance,
-            "without_provenance": len(without_provenance),
-            "coverage": coverage,
-            "missing_ids": without_provenance[:10],
-            "skipped": skipped_types
-        }
-    
-    def _is_type_definition(self, entity: dict) -> bool:
-        """Check if entity is a type/attribute/relation definition."""
-        entity_type = self._get_entity_type_id(entity)
-        return entity_type in self.meta_types
+    def save_relations_jsonl(self, relations: List[dict], filepath: str):
+        """Save relations to JSONL file."""
+        with open(filepath, 'w') as f:
+            for rel in relations:
+                f.write(json.dumps(rel) + '\n')
     
     def _is_provenance_entity(self, entity: dict) -> bool:
         """Check if entity IS a provenance entity."""
-        entity_type = self._get_entity_type_id(entity)
-        return entity_type == self.type_provenance
+        return self.PROVENANCE_TYPE_ID in entity.get('types', [])
     
-    def _make_value(self, value: Any, value_type: int = 1) -> dict:
-        """Create a GRC-20 value object."""
-        return {"type": value_type, "value": value}
+    def get_coverage_stats(self, entities: List[dict], relations: List[dict]) -> Dict[str, Any]:
+        """Calculate provenance coverage statistics."""
+        # Find provenance entities
+        provenance_ids = set()
+        for entity in entities:
+            if self._is_provenance_entity(entity):
+                provenance_ids.add(entity['id'])
+                self.provenance_entities[entity.get('name', entity['id'])] = entity
+        
+        # Find entities with provenance relations
+        entities_with_prov = set()
+        for rel in relations:
+            if rel.get('type') == self.HAS_PROVENANCE_REL_ID:
+                entities_with_prov.add(rel.get('from'))
+        
+        # Count non-provenance entities
+        non_prov_entities = [e for e in entities if not self._is_provenance_entity(e)]
+        total_non_prov = len(non_prov_entities)
+        
+        # Count entities without provenance
+        without_provenance = [e for e in non_prov_entities if e['id'] not in entities_with_prov]
+        
+        coverage = (len(entities_with_prov) / total_non_prov * 100) if total_non_prov > 0 else 100
+        
+        return {
+            "total_entities": len(entities),
+            "provenance_entities": len(provenance_ids),
+            "non_provenance_entities": total_non_prov,
+            "with_provenance": len(entities_with_prov),
+            "without_provenance": len(without_provenance),
+            "coverage": coverage,
+            "missing_ids": [e['id'] for e in without_provenance[:10]]
+        }
     
-    def create_provenance(
+    def create_provenance_entity(
         self,
         source: str,
         citation: str,
         date_accessed: str,
-        provenance_type: str = "DATASET",
+        source_url: str = "",
+        provenance_type: str = "GENERATED",
         provenance_id: Optional[str] = None
     ) -> dict:
         """Create a provenance entity in GRC-20 format."""
         if provenance_id is None:
-            provenance_id = self.schema.generate_id()
+            provenance_id = generate_uuid(seed=f"prov_{source}")
         
-        triples = [
-            {
-                "entity": provenance_id,
-                "attribute": self.attr_type,
-                "value": self._make_value(self.type_provenance)
-            },
-            {
-                "entity": provenance_id,
-                "attribute": self.attr_name,
-                "value": self._make_value(source)
-            },
-            {
-                "entity": provenance_id,
-                "attribute": self.attr_source,
-                "value": self._make_value(source)
-            },
-            {
-                "entity": provenance_id,
-                "attribute": self.attr_citation,
-                "value": self._make_value(citation)
-            },
-            {
-                "entity": provenance_id,
-                "attribute": self.attr_date_accessed,
-                "value": self._make_value(date_accessed, value_type=5)
-            },
-            {
-                "entity": provenance_id,
-                "attribute": self.attr_provenance_type,
-                "value": self._make_value(provenance_type)
-            },
+        values = [
+            {"property": self.prop_name, "value": source},
+            {"property": self.prop_source, "value": source},
+            {"property": self.prop_citation, "value": citation},
+            {"property": self.prop_date_accessed, "value": date_accessed},
+            {"property": self.prop_provenance_type, "value": provenance_type},
         ]
         
-        provenance = {
-            "space": "pharma",
-            "entity": provenance_id,
-            "triples": triples
-        }
+        if source_url:
+            values.append({"property": self.prop_source_url, "value": source_url})
         
-        self.provenance_entities[source] = provenance
-        return provenance
+        return {
+            "id": provenance_id,
+            "name": source,
+            "types": [self.PROVENANCE_TYPE_ID],
+            "values": values
+        }
+    
+    def create_provenance_relation(self, entity_id: str, provenance_id: str) -> dict:
+        """Create a has_provenance relation."""
+        return {
+            "id": generate_uuid(seed=f"prov_rel_{entity_id}_{provenance_id}"),
+            "type": self.HAS_PROVENANCE_REL_ID,
+            "from": entity_id,
+            "to": provenance_id,
+            "values": []
+        }
     
     def add_provenance_to_entities(
         self,
         entities: List[dict],
+        relations: List[dict],
         provenance_id: str
-    ) -> List[dict]:
-        """Add provenance triple to entities that don't have it."""
-        updated = 0
+    ) -> tuple:
+        """Add provenance relations to entities that don't have them."""
+        # Find existing provenance relations
+        entities_with_prov = set()
+        for rel in relations:
+            if rel.get('type') == self.HAS_PROVENANCE_REL_ID:
+                entities_with_prov.add(rel.get('from'))
         
+        # Add provenance relations for entities without
+        added = 0
         for entity in entities:
-            # Skip type definitions and provenance entities
-            if self._is_type_definition(entity) or self._is_provenance_entity(entity):
+            # Skip provenance entities
+            if self._is_provenance_entity(entity):
                 continue
             
-            # Check if already has provenance
-            has_prov = any(
-                t.get("attribute") == self.attr_provenance
-                for t in entity.get("triples", [])
-            )
-            
-            if not has_prov:
-                entity["triples"].append({
-                    "entity": entity.get("entity"),
-                    "attribute": self.attr_provenance,
-                    "value": self._make_value(provenance_id)
-                })
-                updated += 1
+            if entity['id'] not in entities_with_prov:
+                rel = self.create_provenance_relation(entity['id'], provenance_id)
+                relations.append(rel)
+                added += 1
         
-        print(f"  Added provenance to {updated} entities")
-        return entities
+        return entities, relations, added
 
 
 def main():
     """CLI entry point for provenance management."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Provenance Manager")
-    parser.add_argument("--input", required=True, help="Input entities JSON file")
-    parser.add_argument("--output", help="Output file (default: overwrite input)")
-    parser.add_argument("--check", action="store_true", help="Check coverage only")
+    parser = argparse.ArgumentParser(description="Provenance Manager v2")
+    parser.add_argument("--entities", required=True, help="Input entities JSONL file")
+    parser.add_argument("--relations", required=True, help="Input relations JSONL file")
     parser.add_argument("--fix", action="store_true", help="Add missing provenance")
     
     args = parser.parse_args()
     
     pm = ProvenanceManager()
     
-    # Load full data structure
-    data = pm.load_data(args.input)
-    entities = data.get("entities", [])
-    stats = pm.get_coverage_stats(entities)
+    # Load data
+    print("Loading data...")
+    entities = pm.load_entities_jsonl(args.entities)
+    relations = pm.load_relations_jsonl(args.relations)
+    
+    # Get stats
+    stats = pm.get_coverage_stats(entities, relations)
     
     print(f"\n{'='*60}")
     print("PROVENANCE COVERAGE REPORT")
     print(f"{'='*60}")
-    print(f"  Total entities: {stats['total']:,}")
+    print(f"  Total entities: {stats['total_entities']:,}")
+    print(f"  Provenance entities: {stats['provenance_entities']}")
+    print(f"  Non-provenance entities: {stats['non_provenance_entities']:,}")
     print(f"  With provenance: {stats['with_provenance']:,}")
     print(f"  Without provenance: {stats['without_provenance']:,}")
-    print(f"  Skipped meta-types: {stats['skipped']['meta']}")
-    print(f"  Skipped provenance entities: {stats['skipped']['provenance']}")
     print(f"  Coverage: {stats['coverage']:.1f}%")
     
     if stats['missing_ids']:
@@ -246,27 +207,28 @@ def main():
     
     if args.fix and stats['coverage'] < 100:
         # Create pipeline_generated provenance
-        prov = pm.create_provenance(
+        prov = pm.create_provenance_entity(
             source="pipeline_generated",
             citation="Generated by pharma knowledge graph pipeline",
             date_accessed=datetime.now().strftime("%Y-%m-%d"),
             provenance_type="GENERATED"
         )
         
-        # Update entities
-        data["entities"] = pm.add_provenance_to_entities(entities, prov["id"])
+        entities.append(prov)
+        entities, relations, added = pm.add_provenance_to_entities(
+            entities, relations, prov['id']
+        )
         
-        # Add provenance entity to the list
-        data["entities"].append(prov)
-        
-        # Update stats
-        if "stats" in data:
-            data["stats"]["provenance_added"] = stats['without_provenance']
+        print(f"\n  Added provenance to {added} entities")
         
         # Save
-        output = args.output or args.input
-        pm.save_data(data, output)
-        print(f"\n  Saved to: {output}")
+        pm.save_entities_jsonl(entities, args.entities)
+        pm.save_relations_jsonl(relations, args.relations)
+        print(f"  Saved to: {args.entities}")
+        print(f"  Saved to: {args.relations}")
+        
+        stats = pm.get_coverage_stats(entities, relations)
+        print(f"\n  New coverage: {stats['coverage']:.1f}%")
     
     print(f"{'='*60}\n")
     

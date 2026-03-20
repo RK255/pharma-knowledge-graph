@@ -2,6 +2,7 @@
 """
 GRC-20 Merger & Enricher
 ========================
+Merges GRC-20 JSONL entity and relation files, enriches with PubChem properties.
 """
 
 import json
@@ -14,84 +15,115 @@ import uuid
 
 BASE_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop")
 DATA_DIR = BASE_DIR / "data" / "grc20_v2"
-DEFAULT_OUTPUT = DATA_DIR / "grc20_merged.json"
-
-# GRC-20 Spec IDs for relation attributes
-GRC20_FROM_ENTITY = "RERshk4JoYoMC17r1qAo9J"
-GRC20_TO_ENTITY = "Qx8dASiTNsxxP3rJbd4Lzd"
-GRC20_TYPE = "Jfmby78N4BCseZinBmdVov"
+DEFAULT_OUTPUT = DATA_DIR / "grc20_merged"
 
 # Add schema path
 sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
 from pharma_schema import PharmaSchema
 
 class GRC20Merger:
-    """Merges GRC-20 files and enriches with properties."""
+    """Merges GRC-20 JSONL files and enriches with properties."""
     
     def __init__(self):
         self.schema = PharmaSchema()
-        self.entities = {}
+        self.entities = {}  # id -> entity dict
+        self.relations = {}  # id -> relation dict
         self.stats = {
             "rxnorm_entities": 0,
+            "rxnorm_relations": 0,
             "ndc_entities": 0,
+            "ndc_relations": 0,
+            "dailymed_entities": 0,
+            "pubchem_entities": 0,
+            "pubchem_relations": 0,
             "enriched": 0,
             "properties_added": 0,
-            "properties_skipped": 0,
             "total_entities": 0,
-            "nodes": 0,
-            "relations": 0,
+            "total_relations": 0,
         }
-        self.skipped_attributes = defaultdict(int)
         self.rel_id_to_name = {id_: name for name, id_ in self.schema.relations.items()}
         
     def merge_all(self):
         print("=" * 70)
         print("GRC-20 MERGER & ENRICHER")
         print("=" * 70)
-        self.load_grc20_file(DATA_DIR / "rxnorm_entities.json", "RxNorm")
-        self.load_grc20_file(DATA_DIR / "ndc_bridge_entities.json", "NDC Bridge")
-        self.load_grc20_file(DATA_DIR / "dailymed_entities.json", "DailyMed")
-        self.enrich_pubchem()
-        self.classify_entities()
         
-    def load_grc20_file(self, filepath: Path, source_name: str):
-        print(f"\n[{source_name}] Loading {filepath.name}...")
+        # Load RxNorm
+        self.load_entities_jsonl(DATA_DIR / "rxnorm_entities.jsonl", "RxNorm")
+        self.load_relations_jsonl(DATA_DIR / "rxnorm_relations.jsonl", "RxNorm")
+        
+        # Load DailyMed
+        self.load_entities_jsonl(DATA_DIR / "dailymed_entities.jsonl", "DailyMed")
+        self.load_relations_jsonl(DATA_DIR / "dailymed_relations.jsonl", "DailyMed")
+        
+        # Load NDC Bridge
+        self.load_entities_jsonl(DATA_DIR / "ndc_bridge_entities.jsonl", "NDC Bridge")
+        self.load_relations_jsonl(DATA_DIR / "ndc_bridge_relations.jsonl", "NDC Bridge")
+        
+        # Load PubChem
+        self.load_entities_jsonl(DATA_DIR / "pubchem_entities.jsonl", "PubChem")
+        self.load_relations_jsonl(DATA_DIR / "pubchem_relations.jsonl", "PubChem")
+        self.load_entities_jsonl(DATA_DIR / "pubchem_properties_entities.jsonl", "PubChem Properties")
+        self.load_relations_jsonl(DATA_DIR / "pubchem_properties_relations.jsonl", "PubChem Properties")
+        
+        # Enrich with PubChem data
+        self.enrich_pubchem()
+        
+        # Export
+        self.export_jsonl(DEFAULT_OUTPUT)
+        
+    def load_entities_jsonl(self, filepath: Path, source_name: str):
+        """Load entities from JSONL file."""
         if not filepath.exists():
-            print(f"  ⚠️ File not found: {filepath}")
+            print(f"\n[{source_name}] ⚠️ Entities file not found: {filepath.name}")
             return
         
+        print(f"\n[{source_name}] Loading entities: {filepath.name}...")
+        count = 0
+        new_count = 0
+        
         with open(filepath, 'r') as f:
-            data = json.load(f)
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                entity = json.loads(line)
+                entity_id = entity.get("id")
+                if entity_id and entity_id not in self.entities:
+                    self.entities[entity_id] = entity
+                    new_count += 1
+                count += 1
         
-        entities = data.get("entities", [])
-        print(f"  Found {len(entities):,} entities")
+        self.stats[f"{source_name.lower().replace(' ', '_')}_entities"] = new_count
+        print(f"  ✅ Loaded {count:,} entities ({new_count:,} new)")
         
-        new_entities = 0
-        merged_triples = 0
+    def load_relations_jsonl(self, filepath: Path, source_name: str):
+        """Load relations from JSONL file."""
+        if not filepath.exists():
+            print(f"\n[{source_name}] ⚠️ Relations file not found: {filepath.name}")
+            return
         
-        for entity in entities:
-            entity_id = entity.get("entity")
-            if not entity_id:
-                continue
-            
-            if entity_id in self.entities:
-                existing_triples = {self._triple_key(t): t for t in self.entities[entity_id].get("triples", [])}
-                for new_triple in entity.get("triples", []):
-                    key = self._triple_key(new_triple)
-                    if key not in existing_triples:
-                        self.entities[entity_id]["triples"].append(new_triple)
-                        merged_triples += 1
-            else:
-                self.entities[entity_id] = entity
-                new_entities += 1
+        print(f"[{source_name}] Loading relations: {filepath.name}...")
+        count = 0
+        new_count = 0
         
-        print(f"  ✅ Added {new_entities:,} new entities, merged {merged_triples:,} triples")
-
-    def _triple_key(self, triple: dict) -> str:
-        val = triple.get("value", {})
-        return f"{triple.get('attribute', '')}|{val.get('type', '')}|{val.get('value', '')}"
-    
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                relation = json.loads(line)
+                relation_id = relation.get("id")
+                if relation_id and relation_id not in self.relations:
+                    self.relations[relation_id] = relation
+                    new_count += 1
+                count += 1
+        
+        self.stats[f"{source_name.lower().replace(' ', '_')}_relations"] = new_count
+        print(f"  ✅ Loaded {count:,} relations ({new_count:,} new)")
+        
     def enrich_pubchem(self):
+        """Enrich entities with PubChem properties from pubchem_properties.json."""
         print("\n[PubChem] Enriching with properties...")
         pubchem_file = DATA_DIR / "pubchem_properties.json"
         if not pubchem_file.exists():
@@ -104,17 +136,32 @@ class GRC20Merger:
         enriched_cids = data.get("enriched_cids", {})
         print(f"  Found {len(enriched_cids):,} enrichment records")
         
+        # Build RxCUI to entity lookup
+        rxcui_prop_id = self.schema.prop("rxcui")
         rxcui_to_entity = {}
-        rxcui_attr_id = self.schema.attr("rxcui")
         
         for entity_id, entity in self.entities.items():
-            for t in entity.get("triples", []):
-                if t.get("attribute") == rxcui_attr_id:
-                    rxcui = t.get("value", {}).get("value")
+            for v in entity.get("values", []):
+                if v.get("property") == rxcui_prop_id:
+                    rxcui = str(v.get("value", ""))
                     if rxcui:
-                        rxcui_to_entity[str(rxcui)] = entity_id
+                        rxcui_to_entity[rxcui] = entity_id
         
         print(f"  Built RxCUI lookup with {len(rxcui_to_entity):,} mappings")
+        
+        # Supported properties (PubChem enrichment)
+        supported_props = {
+            "mesh_classes": self.schema.prop("mesh_classes"),
+            "smiles": self.schema.prop("smiles"),
+            "inchikey": self.schema.prop("inchikey"),
+            "iupac_name": self.schema.prop("iupac_name"),
+            "pubchem_cid": self.schema.prop("pubchem_cid"),
+            "molecular_formula": self.schema.prop("molecular_formula"),
+            "molecular_weight": self.schema.prop("molecular_weight"),
+            "pubchem_date": self.schema.prop("pubchem_date"),
+            "pmid": self.schema.prop("pmid"),
+            "sid": self.schema.prop("sid"),
+        }
         
         for rxcui, cid_data in enriched_cids.items():
             entity_id = rxcui_to_entity.get(rxcui) or cid_data.get("entity_id")
@@ -123,204 +170,78 @@ class GRC20Merger:
             
             entity = self.entities[entity_id]
             properties = cid_data.get("properties", {})
-            existing = {self._triple_key(t): t for t in entity.get("triples", [])}
-            
-            supported_attrs = {"smiles", "inchikey", "iupac_name", "pubchem_cid", "mesh_classes"}
+            existing_props = {v.get("property") for v in entity.get("values", [])}
             
             for prop_key, value in properties.items():
-                if not value: continue
-                if prop_key not in supported_attrs:
-                    self.skipped_attributes[prop_key] += 1
+                if not value:
+                    continue
+                prop_id = supported_props.get(prop_key)
+                if not prop_id:
+                    continue
+                if prop_id in existing_props:
                     continue
                 
-                triple = {
-                    "entity": entity_id,
-                    "attribute": self.schema.attr(prop_key),
-                    "value": {"type": 1, "value": str(value)},
-                }
-                key = self._triple_key(triple)
-                if key not in existing:
-                    entity["triples"].append(triple)
-                    self.stats["properties_added"] += 1
-            
-            cid = cid_data.get("cid")
-            if cid:
-                triple = {
-                    "entity": entity_id,
-                    "attribute": self.schema.attr("pubchem_cid"),
-                    "value": {"type": 2, "value": int(cid)},
-                }
-                key = self._triple_key(triple)
-                if key not in existing:
-                    entity["triples"].append(triple)
-                    self.stats["properties_added"] += 1
-            
-            prov_id = data.get("provenance_entity")
-            if prov_id:
-                prov_triple = {
-                    "entity": entity_id,
-                    "attribute": self.schema.attr("provenance"),
-                    "value": {"type": 1, "value": prov_id},
-                }
-                if self._triple_key(prov_triple) not in existing:
-                    entity["triples"].append(prov_triple)
+                entity.setdefault("values", []).append({
+                    "property": prop_id,
+                    "value": str(value)
+                })
+                self.stats["properties_added"] += 1
             
             self.stats["enriched"] += 1
         
         print(f"  ✅ Enriched {self.stats['enriched']:,} entities")
-    
-    def classify_entities(self):
-        print("\n[Classifying] Distinguishing nodes from relations...")
-        self.node_ids = set()
-        self.relation_ids = set()
-        self.relationships = []
+        print(f"  ✅ Added {self.stats['properties_added']:,} properties")
         
-        for entity_id, entity in self.entities.items():
-            triples = entity.get("triples", [])
-            from_entity = None
-            to_entity = None
-            all_types = []
-            
-            for t in triples:
-                attr = t.get("attribute", "")
-                val = t.get("value", {}).get("value", "")
-                if attr == GRC20_FROM_ENTITY: from_entity = val
-                elif attr == GRC20_TO_ENTITY: to_entity = val
-                elif attr == GRC20_TYPE: all_types.append(val)
-            
-            if from_entity and to_entity:
-                self.relation_ids.add(entity_id)
-                relation_type_id = next((v for v in all_types if v not in {"Attribute", "Type", "Relation", "RelationType"}), None)
-                type_name = self.rel_id_to_name.get(relation_type_id, "unknown")
-                self.relationships.append({
-                    "entity_id": entity_id,
-                    "from": from_entity,
-                    "to": to_entity,
-                    "type": relation_type_id,
-                    "type_name": type_name,
-                })
-            else:
-                self.node_ids.add(entity_id)
-        
-        self.stats["nodes"] = len(self.node_ids)
-        self.stats["relations"] = len(self.relation_ids)
-        print(f"  ✅ Nodes: {self.stats['nodes']:,}")
-        print(f"  ✅ Relations: {self.stats['relations']:,}")
-        
-    def create_pubchem_provenance(self):
-        pubchem_file = DATA_DIR / "pubchem_properties.json"
-        if not pubchem_file.exists():
-            return None
-        
-        with open(pubchem_file, 'r') as f:
-            data = json.load(f)
-        
-        prov_id = data.get("provenance_entity")
-        pubchem_dates = data.get("pubchem_dates", {})
-        
-        if not prov_id:
-            return None
-        
-        files = [f"{k}: {v}" for k, v in pubchem_dates.items()]
-        citation = f"PubChem properties from {', '.join(files)}"
-        date = max(pubchem_dates.values()) if pubchem_dates else None
-        
-        provenance = {
-            "entity": prov_id,
-            "triples": [
-                {"entity": prov_id, "attribute": GRC20_TYPE, "value": {"type": 1, "value": self.schema.types["Provenance"]}},
-                {"entity": prov_id, "attribute": self.schema.attr("name"), "value": {"type": 1, "value": f"PubChem - {date}"}},
-                {"entity": prov_id, "attribute": self.schema.attr("source"), "value": {"type": 1, "value": "PubChem"}},
-                {"entity": prov_id, "attribute": self.schema.attr("citation"), "value": {"type": 1, "value": citation}},
-                {"entity": prov_id, "attribute": self.schema.attr("date_accessed"), "value": {"type": 1, "value": date or "unknown"}},
-                {"entity": prov_id, "attribute": self.schema.attr("source_url"), "value": {"type": 1, "value": "https://pubchem.ncbi.nlm.nih.gov"}},
-                {"entity": prov_id, "attribute": self.schema.attr("provenance_type"), "value": {"type": 1, "value": "IMPORTED"}},
-            ]
-        }
-        return provenance
-
-    def create_pipeline_provenance(self):
-        """Create a provenance entity for system-generated data."""
-        # Use a deterministic ID based on the Schema if possible, or a fixed one
-        # For consistency, let's use a standard UUID for this pipeline
-        prov_id = "Vi38GjMNzRSCtLHHdAQWbH" # Matches the ID from previous fix attempts
-        
-        provenance = {
-            "entity": prov_id,
-            "triples": [
-                {"entity": prov_id, "attribute": GRC20_TYPE, "value": {"type": 1, "value": self.schema.types["Provenance"]}},
-                {"entity": prov_id, "attribute": self.schema.attr("name"), "value": {"type": 1, "value": "Pipeline Generated"}},
-                {"entity": prov_id, "attribute": self.schema.attr("source"), "value": {"type": 1, "value": "pipeline_generated"}},
-                {"entity": prov_id, "attribute": self.schema.attr("citation"), "value": {"type": 1, "value": "Generated by GRC-20 Pharmaceutical Knowledge Graph Pipeline"}},
-                {"entity": prov_id, "attribute": self.schema.attr("date_accessed"), "value": {"type": 1, "value": datetime.now().strftime("%Y-%m-%d")}},
-                {"entity": prov_id, "attribute": self.schema.attr("source_url"), "value": {"type": 1, "value": "https://github.com/geo-knowledge-graph/pharma-pipeline"}},
-                {"entity": prov_id, "attribute": self.schema.attr("provenance_type"), "value": {"type": 1, "value": "GENERATED"}},
-            ]
-        }
-        return provenance
-
-    def export(self, filepath: Path):
+    def export_jsonl(self, output_path: Path):
+        """Export merged data as JSONL files."""
         print("\n" + "=" * 70)
         print("EXPORTING")
         print("=" * 70)
         
+        # Export entities
+        entities_file = f"{output_path}_entities.jsonl"
+        with open(entities_file, 'w') as f:
+            for entity in self.entities.values():
+                f.write(json.dumps(entity) + "\n")
+        
+        size_mb = Path(entities_file).stat().st_size / 1024 / 1024
+        print(f"  ✅ Entities: {entities_file} ({size_mb:.1f} MB)")
+        
+        # Export relations
+        relations_file = f"{output_path}_relations.jsonl"
+        with open(relations_file, 'w') as f:
+            for relation in self.relations.values():
+                f.write(json.dumps(relation) + "\n")
+        
+        size_mb = Path(relations_file).stat().st_size / 1024 / 1024
+        print(f"  ✅ Relations: {relations_file} ({size_mb:.1f} MB)")
+        
+        # Count relation types
         rel_type_counts = defaultdict(int)
-        for rel in self.relationships:
-            rel_type_counts[rel["type_name"]] += 1
+        for rel in self.relations.values():
+            type_id = rel.get("type", "unknown")
+            type_name = self.rel_id_to_name.get(type_id, type_id[:8])
+            rel_type_counts[type_name] += 1
         
-        output = {
-            "space": "pharma",
-            "version": "2.0.0",
-            "exported_at": datetime.now().isoformat(),
-            "stats": {
-                "total_entities": len(self.entities),
-                "nodes": self.stats["nodes"],
-                "relations": self.stats["relations"],
-                "rxnorm_entities": self.stats["rxnorm_entities"],
-                "ndc_entities": self.stats["ndc_entities"],
-                "enriched": self.stats["enriched"],
-                "properties_added": self.stats["properties_added"],
-                "relationship_types": dict(sorted(rel_type_counts.items(), key=lambda x: -x[1])),
-            },
-            "entities": list(self.entities.values()),
-            "node_ids": list(self.node_ids),
-            "relation_ids": list(self.relation_ids),
-            "relationships": self.relationships,
-        }
+        print(f"\n  Relation types:")
+        for name, count in sorted(rel_type_counts.items(), key=lambda x: -x[1])[:10]:
+            print(f"    {name}: {count:,}")
         
-        # Add Provenance Entities
-        added_prov = False
-        
-        pubchem_prov = self.create_pubchem_provenance()
-        if pubchem_prov:
-            output["entities"].append(pubchem_prov)
-            print(f"  ✅ Added PubChem provenance: {pubchem_prov['entity']}")
-            added_prov = True
+        print(f"\n  Stats:")
+        print(f"    Total entities: {len(self.entities):,}")
+        print(f"    Total relations: {len(self.relations):,}")
+        print(f"    Enriched: {self.stats['enriched']:,}")
+        print(f"    Properties added: {self.stats['properties_added']:,}")
 
-        pipeline_prov = self.create_pipeline_provenance()
-        if pipeline_prov:
-            # Only add if not already present (e.g. from RxNorm)
-            if not any(e['entity'] == pipeline_prov['entity'] for e in output['entities']):
-                output["entities"].append(pipeline_prov)
-                print(f"  ✅ Added Pipeline provenance: {pipeline_prov['entity']}")
-                added_prov = True
-        
-        if added_prov:
-            print("  ✅ All Provenance Entities Exported")
-        
-        with open(filepath, 'w') as f:
-            json.dump(output, f, indent=2)
-        
-        size_mb = filepath.stat().st_size / 1024 / 1024
-        print(f"  ✅ Exported to: {filepath} ({size_mb:.1f} MB)")
 
 def main():
-    parser = argparse.ArgumentParser(description="Merge GRC-20 files and enrich")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output file path")
+    parser = argparse.ArgumentParser(description="Merge GRC-20 files")
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Output path prefix")
     args = parser.parse_args()
+    
     merger = GRC20Merger()
     merger.merge_all()
-    merger.export(args.output)
+
 
 if __name__ == "__main__":
     main()

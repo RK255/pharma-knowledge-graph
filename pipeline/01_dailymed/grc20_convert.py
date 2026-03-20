@@ -16,38 +16,33 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
 from pharma_schema import PharmaSchema
 
 sys.path.insert(0, str(Path(__file__).parent))
-from grc20_utils import generate_grc20_id, GRC20_VALUE_TYPES
+from grc20_utils import generate_uuid, GRC20_VALUE_TYPES
 
 # Initialize schema
 schema = PharmaSchema()
 
 # GRC-20 Specification Constants (from schema)
+# Build property mappings lazily to handle missing properties
+def _build_property_dict(names):
+    """Build a dict of property IDs, skipping any that don't exist in schema."""
+    result = {}
+    for name in names:
+        try:
+            result[name] = schema.prop(name)
+        except KeyError:
+            pass  # Property not in schema, skip
+    return result
+
 GRC20_SPEC = {
     "value_types": GRC20_VALUE_TYPES,
-    "standard_attributes": {
-        "name": schema.attr("name"),
-        "type": schema.attr("type"),
-        "description": schema.attr("description"),
-    },
-    "standard_types": {
-        "type": schema.attr("type")
-    }
+    "standard_attributes": _build_property_dict(["name", "description"]),
 }
 
-# Attribute mappings from schema
-ATTRIBUTES = {
-    "name": schema.attr("name"),
-    "type": schema.attr("type"),
-    "description": schema.attr("description"),
-    "content": schema.attr("content"),
-    "section_type": schema.attr("section_type"),
-    "fda_set_id": schema.attr("fda_set_id"),
-    "effective_time": schema.attr("effective_time"),
-    "set_id": schema.attr("set_id"),
-    "provenance": schema.attr("provenance"),
-    "from_entity": schema.attr("from_entity"),
-    "to_entity": schema.attr("to_entity"),
-}
+# Property mappings from schema (lazy-loaded)
+PROPERTIES = _build_property_dict([
+    "name", "description", "content", "section_type",
+    "fda_set_id", "effective_time", "set_id"
+])
 
 # Entity type mappings from schema
 ENTITY_TYPES = {
@@ -69,17 +64,68 @@ RELATIONS = {
 # Manufacturer deduplication - track by name
 MANUFACTURER_LOOKUP = {}  # name -> entity_id
 
-def create_triple(entity_id, attribute_name, value, value_type="TEXT"):
-    """Create a GRC-20 triple using schema IDs"""
-    attr_id = ATTRIBUTES.get(attribute_name) or schema.attr(attribute_name)
+def create_value(property_name: str, value, value_type: str = "TEXT") -> dict:
+    """Create a GRC-20 value for an entity's values array.
+    
+    Args:
+        property_name: Name of the property (e.g., "name", "description")
+        value: The value to store
+        value_type: GRC-20 value type (TEXT, NUMBER, etc.)
+    
+    Returns:
+        dict with 'property' and 'value' keys
+    """
+    try:
+        prop_id = schema.prop(property_name)
+    except KeyError:
+        return None  # Property not in schema, skip
+    
     return {
-        "entity": entity_id,
-        "attribute": attr_id,
-        "value": {
-            "type": GRC20_VALUE_TYPES.get(value_type, 1),
-            "value": str(value)
-        }
+        "property": prop_id,
+        "value": str(value)
     }
+
+def create_entity(entity_id: str, entity_type: str, name: str, values: list = None) -> dict:
+    """Create a GRC-20 entity with proper structure.
+    
+    Args:
+        entity_id: UUID for the entity
+        entity_type: Type name (e.g., "PackageInsert", "Section")
+        name: Entity name
+        values: List of value dicts from create_value()
+    
+    Returns:
+        Entity dict with 'id', 'name', 'types', 'values'
+    """
+    entity = {
+        "id": entity_id,
+        "name": name,
+        "types": [ENTITY_TYPES[entity_type]],
+        "values": values or []
+    }
+    return entity
+
+def create_relation(relation_id: str, relation_type: str, from_id: str, to_id: str, values: list = None) -> dict:
+    """Create a GRC-20 relation with proper structure.
+    
+    Args:
+        relation_id: UUID for the relation
+        relation_type: Relation type name (e.g., "has_section", "manufactured_by")
+        from_id: Source entity ID
+        to_id: Target entity ID
+        values: Optional list of value dicts
+    
+    Returns:
+        Relation dict with 'id', 'type', 'from', 'to', 'values'
+    """
+    relation = {
+        "id": relation_id,
+        "type": RELATIONS.get(relation_type),
+        "from": from_id,
+        "to": to_id,
+        "values": values or []
+    }
+    return relation
 
 def print_progress_bar(current, total, bar_length=50, progress=None):
     """Print a clean progress bar and write to progress file"""
@@ -105,113 +151,135 @@ def print_progress_bar(current, total, bar_length=50, progress=None):
     sys.stdout.flush()
 
 def check_value_types(entities):
-    """Check if all value types match GRC-20 specification"""
+    """Check if all entities have valid structure for GRC-20 specification"""
     issues = []
-    valid_types = set(GRC20_SPEC["value_types"].values())
     
     for entity in entities:
-        for triple in entity.get('triples', []):
-            value_type = triple.get('value', {}).get('type')
-            if value_type not in valid_types:
+        entity_id = entity.get('id')
+        
+        # Check that entity has 'id' field
+        if not entity_id:
+            issues.append({
+                "entity": "MISSING",
+                "issue": "Entity missing 'id' field",
+                "fix": "Ensure all entities have 'id' field"
+            })
+            continue
+        
+        # Check that entity has 'types' array
+        if 'types' not in entity:
+            issues.append({
+                "entity": entity_id,
+                "issue": "Entity missing 'types' array",
+                "fix": "Ensure all entities have 'types' array"
+            })
+        
+        # Check values array
+        for value in entity.get('values', []):
+            prop_id = value.get('property')
+            if not prop_id or len(prop_id) != 32:
                 issues.append({
-                    "entity": entity.get('entity'),
-                    "attribute": triple.get('attribute'),
-                    "issue": f"Invalid value type: {value_type}",
-                    "fix": f"Use one of: {list(valid_types)}"
+                    "entity": entity_id,
+                    "issue": f"Invalid property ID: {prop_id}",
+                    "fix": "Property IDs should be 32-character UUIDs (hex format)"
                 })
     
     return issues, len(issues) == 0
 
 def check_entity_ids_fixed(entities):
-    """FIXED version of the entity ID check that doesn't false-positive on section names"""
+    """Check entity IDs are valid UUIDs (32-char hex format)"""
     issues = []
     
     for entity in entities:
-        entity_id = entity.get('entity')
-        if not entity_id or len(entity_id) != 22:
+        entity_id = entity.get('id')
+        if not entity_id:
+            issues.append({
+                "entity": "MISSING",
+                "issue": "Entity missing 'id' field",
+                "fix": "Ensure all entities have 'id' field"
+            })
+            continue
+        
+        # GRC-20 uses 32-character hex UUIDs (without hyphens)
+        if len(entity_id) != 32:
             issues.append({
                 "entity": entity_id,
-                "issue": f"Invalid entity ID length: {len(entity_id) if entity_id else 0}",
-                "fix": "Generate 22-character Base58 ID using UUID4"
+                "issue": f"Invalid entity ID length: {len(entity_id)}, expected 32",
+                "fix": "Use 32-character hex UUID (no hyphens)"
             })
         
-        # Check triples for valid attribute IDs
-        for triple in entity.get('triples', []):
-            attr_id = triple.get('attribute')
-            if not attr_id or len(attr_id) != 22:
-                issues.append({
-                    "entity": entity_id,
-                    "attribute": attr_id,
-                    "issue": f"Invalid attribute ID length: {len(attr_id) if attr_id else 0}",
-                    "fix": "Use 22-character Base58 ID"
-                })
-            
-            # FIXED: Only check entity references in 'has_section' attributes, not 'name' attributes
-            value = triple.get('value', {}).get('value')
-            if isinstance(value, str) and len(value) == 22 and value.isalnum():
-                # Only validate as Base58 if this is a has_section attribute
-                if triple.get('attribute') == RELATIONS["has_section"]:
-                    if not all(c in '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz' for c in value):
-                        issues.append({
-                            "entity": entity_id,
-                            "attribute": attr_id,
-                            "issue": f"Invalid entity reference in value: {value}",
-                            "fix": "Use valid Base58 encoding"
-                        })
+        # Check it's valid hex
+        try:
+            int(entity_id, 16)
+        except ValueError:
+            issues.append({
+                "entity": entity_id,
+                "issue": "Entity ID is not valid hexadecimal",
+                "fix": "Use UUID4 converted to 32-char hex string"
+            })
     
     return issues, len(issues) == 0
 
 def check_standard_attributes(entities):
-    """Check if standard attributes are used correctly with detailed tracking"""
+    """Check if standard properties are used correctly"""
     issues = []
-    standard_attrs = GRC20_SPEC["standard_attributes"]
     
-    # Count usage of standard attributes
-    usage_count = defaultdict(int)
-    custom_attrs = set()
-    
-    # Track which standard attributes are used (pharma-specific)
-    # Note: cover/blocks are Geo-specific, not relevant for pharma data
+    # Track which standard properties are used
     used_standard = {
         "name": False,
-        "type": False,
         "description": False,
-        "has_section": False,  # Our equivalent to blocks
     }
     
-    has_section_id = RELATIONS.get("has_section")
+    usage_count = defaultdict(int)
+    name_prop_id = PROPERTIES.get("name")
+    desc_prop_id = PROPERTIES.get("description")
     
     for entity in entities:
-        for triple in entity.get('triples', []):
-            attr_id = triple.get('attribute')
+        for value in entity.get('values', []):
+            prop_id = value.get('property')
             
-            # Check if it's a standard attribute
-            if attr_id in standard_attrs.values():
-                # Find which standard attribute this is
-                for std_name, std_id in standard_attrs.items():
-                    if attr_id == std_id:
-                        used_standard[std_name] = True
-                        usage_count[attr_id] += 1
-                        break
-            # Check for has_section relation (our blocks equivalent)
-            elif attr_id == has_section_id:
-                used_standard["has_section"] = True
-                usage_count[attr_id] += 1
-            else:
-                custom_attrs.add(attr_id)
+            if prop_id == name_prop_id:
+                used_standard["name"] = True
+                usage_count[prop_id] += 1
+            elif prop_id == desc_prop_id:
+                used_standard["description"] = True
+                usage_count[prop_id] += 1
     
     # Calculate compliance score
     used_count = sum(used_standard.values())
     total_count = len(used_standard)
-    compliance_percent = (used_count / total_count) * 100
+    compliance_percent = (used_count / total_count) * 100 if total_count > 0 else 0
     
     return issues, used_standard, compliance_percent, usage_count
 
 def check_entity_types(entities):
     """Check if entity types are properly defined"""
     issues = []
-#     type_entities = set()
     type_usage = defaultdict(int)
+    
+    for entity in entities:
+        types = entity.get('types', [])
+        for type_id in types:
+            type_usage[type_id] += 1
+    
+    # Check that we have entities of expected types
+    expected_types = ['PackageInsert', 'Section', 'Manufacturer']
+    found_types = set()
+    
+    for type_name in expected_types:
+        type_id = ENTITY_TYPES.get(type_name)
+        if type_id and type_usage.get(type_id, 0) > 0:
+            found_types.add(type_name)
+    
+    missing = set(expected_types) - found_types
+    if missing:
+        issues.append({
+            "issue": f"Missing entity types: {missing}",
+            "fix": f"Ensure entities with types {missing} are created"
+        })
+    
+    return issues, len(issues) == 0
+
     
     # Find all entities that define types
     for entity in entities:
@@ -272,8 +340,8 @@ def check_compliance_fixed(entities):
     print(f" Standard Attributes: {standard_attr_percent:.0f}%")
     print("   Detailed breakdown:")
     for attr_name, used in used_standard.items():
-        if attr_name == "blocks" and ATTRIBUTES.get("has_section") in usage_count:
-            print(f"     • {attr_name}: ✅ (using '{ATTRIBUTES.get('has_section')}' as equivalent)")
+        if attr_name == "blocks" and PROPERTIES.get("has_section") in usage_count:
+            print(f"     • {attr_name}: ✅ (using '{PROPERTIES.get('has_section')}' as equivalent)")
         elif used:
             print(f"     • {attr_name}: ✅")
         else:
@@ -296,7 +364,7 @@ def check_compliance_fixed(entities):
         
         if not entity_id_ok:
             print(" 1. Fix Entity ID Generation:")
-            print("    - Use the corrected generate_grc20_id() function")
+            print("    - Use the corrected generate_uuid() function")
             print("    - Ensure all IDs are exactly 22 characters")
             print("    - Check that all fixed attribute IDs are 22 characters")
         
@@ -315,73 +383,100 @@ def check_compliance_fixed(entities):
     
     return scores, overall_score
 
-def display_sample_entities(output_file):
-    """Display sample entities with clear attribute mapping"""
+def display_sample_entities(entities_file):
+    """Display sample entities with clear property mapping"""
     print("\n SAMPLE ENTITIES:")
     print("=" * 80)
     
     with open(output_file, 'r') as f:
         data = json.load(f)
-        entities = data['entities']  # Get entities from proper GRC-20 structure
+        entities = data.get('entities', [])
+        relations = data.get('relations', [])
     
     # Create reverse mapping for display
-    reverse_attrs = {v: k for k, v in ATTRIBUTES.items()}
+    reverse_props = {v: k for k, v in PROPERTIES.items()}
+    reverse_types = {v: k for k, v in ENTITY_TYPES.items()}
     
     # Find a PackageInsert entity
     drug_entity = None
     section_entity = None
+    manufacturer_entity = None
     
     for entity in entities:
-        if entity.get('triples'):
-            # Check if it's a PackageInsert entity
-            for triple in entity['triples']:
-                if triple.get('attribute') == ATTRIBUTES["type"] and triple.get('value', {}).get('value') == ENTITY_TYPES.get('PackageInsert'):
-                    drug_entity = entity
-                    break
-                elif triple.get('attribute') == ATTRIBUTES["type"] and triple.get('value', {}).get('value') == ENTITY_TYPES.get('section'):
-                    section_entity = entity
-                    break
-            
-            if drug_entity and section_entity:
-                break
+        types = entity.get('types', [])
+        type_names = [reverse_types.get(t, t) for t in types]
+        
+        if 'PackageInsert' in type_names and not drug_entity:
+            drug_entity = entity
+        elif 'Section' in type_names and not section_entity:
+            section_entity = entity
+        elif 'Manufacturer' in type_names and not manufacturer_entity:
+            manufacturer_entity = entity
+        
+        if drug_entity and section_entity and manufacturer_entity:
+            break
     
     # Display PackageInsert entity sample
     if drug_entity:
-        print(" SAMPLE DRUG ENTITY:")
-        print(f"   Entity ID: {drug_entity['entity']} (length: {len(drug_entity['entity'])})")
-        print("   Triples:")
-        for i, triple in enumerate(drug_entity['triples'][:3]):  # Show first 3 triples
-            attr_name = reverse_attrs.get(triple['attribute'], triple['attribute'])
-            attr_id = triple['attribute']
-            print(f"   {i+1}. {attr_name}: {triple['value']['value']} (attr ID: {attr_id}, length: {len(attr_id)})")
-        print(f"   ... ({len(drug_entity['triples'])} total triples)")
+        print(" SAMPLE PACKAGE INSERT ENTITY:")
+        print(f"   Entity ID: {drug_entity['id']} (length: {len(drug_entity['id'])})")
+        print(f"   Types: {drug_entity.get('types', [])}")
+        print("   Values:")
+        for i, value in enumerate(drug_entity.get('values', [])[:4]):  # Show first 4 values
+            prop_name = reverse_props.get(value.get('property'), value.get('property', 'unknown'))
+            val = value.get('value', '')
+            if len(str(val)) > 60:
+                val = str(val)[:60] + "..."
+            print(f"   {i+1}. {prop_name}: {val}")
+        print(f"   ... ({len(drug_entity.get('values', []))} total values)")
     
     # Display section entity sample
     if section_entity:
         print("\n SAMPLE SECTION ENTITY:")
-        print(f"   Entity ID: {section_entity['entity']} (length: {len(section_entity['entity'])})")
-        print("   Triples:")
-        for i, triple in enumerate(section_entity['triples']):
-            attr_name = reverse_attrs.get(triple['attribute'], triple['attribute'])
-            value = triple['value']['value']
-            if attr_name == 'content' and len(value) > 100:
-                value = value[:100] + "..."
-            attr_id = triple['attribute']
-            print(f"   {i+1}. {attr_name}: {value} (attr ID: {attr_id}, length: {len(attr_id)})")
+        print(f"   Entity ID: {section_entity['id']} (length: {len(section_entity['id'])})")
+        print(f"   Types: {section_entity.get('types', [])}")
+        print("   Values:")
+        for i, value in enumerate(section_entity.get('values', [])):
+            prop_name = reverse_props.get(value.get('property'), value.get('property', 'unknown'))
+            val = value.get('value', '')
+            if prop_name == 'content' and len(str(val)) > 80:
+                val = str(val)[:80] + "..."
+            print(f"   {i+1}. {prop_name}: {val}")
     
-    print("\n ATTRIBUTE MAPPING:")
+    # Display manufacturer entity sample
+    if manufacturer_entity:
+        print("\n SAMPLE MANUFACTURER ENTITY:")
+        print(f"   Entity ID: {manufacturer_entity['id']} (length: {len(manufacturer_entity['id'])})")
+        print(f"   Types: {manufacturer_entity.get('types', [])}")
+        print("   Values:")
+        for i, value in enumerate(manufacturer_entity.get('values', [])):
+            prop_name = reverse_props.get(value.get('property'), value.get('property', 'unknown'))
+            val = value.get('value', '')
+            print(f"   {i+1}. {prop_name}: {val}")
+    
+    # Display sample relations
+    if relations:
+        print("\n SAMPLE RELATIONS:")
+        print(f"   Total relations: {len(relations)}")
+        for i, rel in enumerate(relations[:3]):
+            rel_type = rel.get('type', 'unknown')
+            reverse_rel = {v: k for k, v in RELATIONS.items()}
+            rel_name = reverse_rel.get(rel_type, rel_type)
+            print(f"   {i+1}. {rel_name}: {rel.get('from', '?')} -> {rel.get('to', '?')}")
+    
+    print("\n PROPERTY MAPPING:")
     print("=" * 80)
-    print("   Fixed Attributes:")
-    for name, attr_id in ATTRIBUTES.items():
-        # Mark if this is equivalent to a standard attribute
-        equiv_note = ""
-        if name == "has_section":
-            equiv_note = " (equivalent to 'blocks')"
-        print(f"   • {name}: {attr_id} (length: {len(attr_id)}){equiv_note}")
+    print("   Properties (GRC-20 standard uses 32-char hex UUIDs):")
+    for name, prop_id in sorted(PROPERTIES.items()):
+        print(f"   • {name}: {prop_id}")
     
     print("\n   Entity Types:")
     for name, type_id in ENTITY_TYPES.items():
-        print(f"   • {name}: {type_id} (length: {len(type_id)})")
+        print(f"   • {name}: {type_id}")
+    
+    print("\n   Relation Types:")
+    for name, rel_id in RELATIONS.items():
+        print(f"   • {name}: {rel_id}")
     
     print("=" * 80)
 
@@ -453,7 +548,7 @@ def analyze_pharmaceutical_data(file_path, sample_size=100):
 #     for type_entity in type_entities:
 #         type_entity['triples'].append({
 #             'entity': type_entity['entity'],
-#             'attribute': schema.attr('provenance'),
+#             'attribute': schema.prop('provenance'),
 #             'value': {'type': 1, 'value': provenance_entity['entity']}
 #         })
 # 
@@ -476,23 +571,35 @@ def extract_description_from_sections(sections):
     
     return None
 
-def get_or_create_manufacturer(manufacturer_name):
-    """Get existing manufacturer ID or create new one. Deduplicates by name."""
+def get_or_create_manufacturer(manufacturer_name, provenance_id):
+    """Get or create a manufacturer entity, deduplicating by name.
+    
+    Returns:
+        tuple: (entity_dict or None, entity_id) - entity is None if already created
+    """
     global MANUFACTURER_LOOKUP
     
     if not manufacturer_name:
-        return None
+        return None, None
     
     # Normalize name for deduplication
     normalized = manufacturer_name.strip().lower()
     
     if normalized in MANUFACTURER_LOOKUP:
-        return MANUFACTURER_LOOKUP[normalized]
+        return None, MANUFACTURER_LOOKUP[normalized]  # Already created
     
     # Create new manufacturer entity
-    mfr_id = generate_grc20_id()
+    mfr_id = generate_uuid()
     MANUFACTURER_LOOKUP[normalized] = mfr_id
-    return mfr_id
+    
+    # Create manufacturer entity with new GRC-20 format
+    values = []
+    val = create_value("name", manufacturer_name)
+    if val:
+        values.append(val)
+    
+    entity = create_entity(mfr_id, "Manufacturer", manufacturer_name, values)
+    return entity, mfr_id
 
 def convert_package_insert_to_grc20(insert_data, analysis_results, provenance_id):
     """Convert a single package insert to GRC-20 format.
@@ -501,124 +608,90 @@ def convert_package_insert_to_grc20(insert_data, analysis_results, provenance_id
     - PackageInsert entity with metadata
     - Section entities for each section
     - Manufacturer entity (deduplicated by name)
-    - Links sections to package insert via has_section relation
-    - Links to manufacturer via manufactured_by relation
+    - Relations linking sections to package insert and manufacturer
+    
+    Returns:
+        tuple: (entities list, relations list)
     """
-    insert_id = generate_grc20_id()
+    entities = []
+    relations = []
+    
+    insert_id = generate_uuid()
+    name = insert_data.get('title', '')
     
     # Create the main PackageInsert entity
-    insert_triples = [
-        create_triple(insert_id, "name", insert_data.get('title', '')),
-        create_triple(insert_id, "type", ENTITY_TYPES['PackageInsert'])
-    ]
+    values = []
+    
+    val = create_value("name", name)
+    if val:
+        values.append(val)
     
     # Extract description from sections
     description = extract_description_from_sections(insert_data.get('sections', []))
     if description:
-        insert_triples.append(create_triple(insert_id, "description", description[:500]))
+        val = create_value("description", description[:500])
+        if val:
+            values.append(val)
     
     # Add FDA-specific attributes
-    if 'fda_set_id' in insert_data:
-        insert_triples.append(create_triple(insert_id, "fda_set_id", insert_data['fda_set_id']))
-    
-    if 'set_id' in insert_data:
-        insert_triples.append(create_triple(insert_id, "set_id", insert_data['set_id']))
+    for prop_name, data_key in [("fda_set_id", "fda_set_id"), ("set_id", "set_id")]:
+        if data_key in insert_data:
+            val = create_value(prop_name, insert_data[data_key])
+            if val:
+                values.append(val)
     
     if 'effective_time' in insert_data:
-        insert_triples.append(create_triple(insert_id, "effective_time", insert_data['effective_time'], "TIME"))
+        val = create_value("effective_time", insert_data['effective_time'])
+        if val:
+            values.append(val)
     
-    # Add provenance link
-    insert_triples.append(create_triple(insert_id, "provenance", provenance_id))
-    # Handle manufacturer as entity relation
-    manufacturer_entity = None
-    manufactured_by_rel_entity = None
+    insert_entity = create_entity(insert_id, "PackageInsert", name, values)
+    entities.append(insert_entity)
+    
+    # Handle manufacturer
     manufacturer_name = insert_data.get('manufacturer')
     if manufacturer_name:
-        mfr_id = get_or_create_manufacturer(manufacturer_name)
+        mfr_entity, mfr_id = get_or_create_manufacturer(manufacturer_name, provenance_id)
+        if mfr_entity:
+            entities.append(mfr_entity)
         
-        # Create manufactured_by relation entity
-        manufactured_by_rel_id = generate_grc20_id()
-        manufactured_by_rel_entity = {
-            "entity": manufactured_by_rel_id,
-            "triples": [
-                # Type attributes for relation
-                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": ENTITY_TYPES['Relation']}},
-                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": RELATIONS["manufactured_by"]}},
-                # from and to
-                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES.get("from_entity") or schema.attr("from_entity"), "value": {"type": 1, "value": insert_id}},
-                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES.get("to_entity") or schema.attr("to_entity"), "value": {"type": 1, "value": mfr_id}},
-                # Provenance
-                {"entity": manufactured_by_rel_id, "attribute": ATTRIBUTES["provenance"], "value": {"type": 1, "value": provenance_id}},
-            ]
-        }
-        
-        manufacturer_entity = {
-            "entity": mfr_id,
-            "triples": [
-                create_triple(mfr_id, "name", manufacturer_name),
-                create_triple(mfr_id, "type", ENTITY_TYPES['Manufacturer']),
-                create_triple(mfr_id, "provenance", provenance_id)
-            ]
-        }
+        # Create manufactured_by relation
+        rel = create_relation(
+            generate_uuid(), "manufactured_by", insert_id, mfr_id
+        )
+        relations.append(rel)
     
-    
-    # Convert sections to separate entities
-    section_entities = []
+    # Convert sections
     for section in insert_data.get('sections', []):
-        section_id = generate_grc20_id()
+        section_id = generate_uuid()
         section_type_name = section.get('section_type', 'OTHER')
+        section_title = section.get('title', section_type_name)
         
-        # Create has_section relation entity
-        has_section_rel_id = generate_grc20_id()
-        has_section_rel_entity = {
-            "entity": has_section_rel_id,
-            "triples": [
-                # Type attributes for relation
-                {"entity": has_section_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": ENTITY_TYPES['Relation']}},
-                {"entity": has_section_rel_id, "attribute": ATTRIBUTES["type"], "value": {"type": 1, "value": RELATIONS["has_section"]}},
-                # from and to
-                {"entity": has_section_rel_id, "attribute": ATTRIBUTES.get("from_entity") or schema.attr("from_entity"), "value": {"type": 1, "value": insert_id}},
-                {"entity": has_section_rel_id, "attribute": ATTRIBUTES.get("to_entity") or schema.attr("to_entity"), "value": {"type": 1, "value": section_id}},
-                # Provenance
-                {"entity": has_section_rel_id, "attribute": ATTRIBUTES["provenance"], "value": {"type": 1, "value": provenance_id}},
-            ]
-        }
-        section_entities.append(has_section_rel_entity)
+        section_values = []
         
-        # Create section entity
-        section_triples = [
-            create_triple(section_id, "name", section.get('title', '')),
-            create_triple(section_id, "type", ENTITY_TYPES['Section']),
-            create_triple(section_id, "section_type", section_type_name),
-        ]
+        val = create_value("name", section_title)
+        if val:
+            section_values.append(val)
         
-        # Add content if it exists
+        val = create_value("section_type", section_type_name)
+        if val:
+            section_values.append(val)
+        
         if 'content' in section:
-            section_triples.append(create_triple(section_id, "content", section['content']))
+            val = create_value("content", section['content'])
+            if val:
+                section_values.append(val)
         
-        # Add provenance link
-        section_triples.append(create_triple(section_id, "provenance", provenance_id))
+        section_entity = create_entity(section_id, "Section", section_title, section_values)
+        entities.append(section_entity)
         
-        section_entity = {
-            "entity": section_id,
-            "triples": section_triples
-        }
-        section_entities.append(section_entity)
+        # Create has_section relation
+        rel = create_relation(
+            generate_uuid(), "has_section", insert_id, section_id
+        )
+        relations.append(rel)
     
-    # Create the main PackageInsert entity
-    insert_entity = {
-        "entity": insert_id,
-        "triples": insert_triples
-    }
-    
-    # Combine: insert_entity, section_entities (includes relations), manufacturer_entity, relation_entity
-    all_entities = [insert_entity] + section_entities
-    if manufacturer_entity:
-        all_entities.append(manufacturer_entity)
-    if manufactured_by_rel_entity:
-        all_entities.append(manufactured_by_rel_entity)
-    
-    return all_entities  # Return list of all entities created
+    return entities, relations
 
 def convert_dataset_to_grc20(input_file, output_file, progress=None):
     """Convert the entire dataset to GRC-20 format with clean progress reporting"""
@@ -651,14 +724,11 @@ def convert_dataset_to_grc20(input_file, output_file, progress=None):
     print("CREATING PROVENANCE")
     print("=" * 80)
     
-    provenance_entity = schema.create_provenance(
-        source="FDA SPL - DailyMed",
-        citation="DailyMed Package Insert Data, U.S. Food and Drug Administration. https://dailymed.nlm.nih.gov/",
+    provenance_entity = schema.create_provenance_entity(
+        source_name="DailyMed",
         date_accessed=datetime.now().strftime("%Y-%m-%d"),
-        source_url="https://dailymed.nlm.nih.gov/dailymed/about.cfm",
-        provenance_type="IMPORTED",
     )
-    provenance_id = provenance_entity["entity"]
+    provenance_id = provenance_entity["id"]
     print(f"  Created provenance: {provenance_id}")
     
     print("\n" + "=" * 80)
@@ -669,64 +739,49 @@ def convert_dataset_to_grc20(input_file, output_file, progress=None):
 #     type_entities = create_type_entities()
 #     print(f"Created {len(type_entities)} type entities")
     
-    # Create provenance entity
-    provenance_entity = schema.create_provenance(
-        source="FDA SPL - DailyMed",
-        citation="DailyMed Package Insert Data, U.S. Food and Drug Administration. https://dailymed.nlm.nih.gov/",
-        date_accessed=datetime.now().strftime("%Y-%m-%d"),
-        source_url="https://dailymed.nlm.nih.gov/dailymed/about.cfm",
-        provenance_type="IMPORTED",
-    )
-    provenance_id = provenance_entity["entity"]
-    print(f"  Created provenance: {provenance_id}")
-    
     # Load the full dataset
     with open(input_file, 'r') as f:
         parent_inserts = json.load(f)
     
     # Convert to GRC-20
-    grc20_entities = []  # No type entities
-    grc20_entities.append(provenance_entity)  # Add provenance entity
+    grc20_entities = [provenance_entity]  # Start with provenance
+    grc20_relations = []
     processed_count = 0
     section_count = 0
     description_count = 0
     
-    manufacturer_entities = {}  # Track unique manufacturers
+    manufacturer_ids = set()  # Track unique manufacturer IDs
     
     for parent_insert in parent_inserts:
-        # convert_package_insert_to_grc20 returns a list of all entities
-        created_entities = convert_package_insert_to_grc20(parent_insert, analysis, provenance_id)
+        # convert_package_insert_to_grc20 returns (entities, relations)
+        created_entities, created_relations = convert_package_insert_to_grc20(parent_insert, analysis, provenance_id)
+        
         # Find the PackageInsert entity for description checking
         insert_entity = None
         for entity in created_entities:
-            for triple in entity.get("triples", []):
-                if triple.get("attribute") == ATTRIBUTES["type"] and triple.get("value", {}).get("value") == ENTITY_TYPES["PackageInsert"]:
-                    insert_entity = entity
-                    break
-        
-        
-        for entity in created_entities:
-            grc20_entities.append(entity)
+            # Check types array for PackageInsert type
+            entity_types = entity.get("types", [])
+            if ENTITY_TYPES["PackageInsert"] in entity_types:
+                insert_entity = entity
+                break
             
-            # Track manufacturer for deduplication
-            triples = entity.get('triples', [])
-            for triple in triples:
-                if triple.get('attribute') == ATTRIBUTES["type"]:
-                    type_val = triple.get('value', {}).get('value')
-                    if type_val == ENTITY_TYPES['Manufacturer']:
-                        mfr_id = entity['entity']
-                        if mfr_id not in manufacturer_entities:
-                            manufacturer_entities[mfr_id] = entity
-                    elif type_val == ENTITY_TYPES['Section']:
-                        section_count += 1
+            # Track section count
+            if ENTITY_TYPES['Section'] in entity_types:
+                section_count += 1
+            
+            # Track manufacturer IDs
+            if ENTITY_TYPES['Manufacturer'] in entity_types:
+                manufacturer_ids.add(entity['id'])
         
         # Count how many inserts have descriptions
         if insert_entity:
-            for triple in insert_entity['triples']:
-                if triple.get('attribute') == ATTRIBUTES['description']:
+            for value in insert_entity.get('values', []):
+                if value.get('property') == PROPERTIES.get('description'):
                     description_count += 1
                     break
-            
+        
+        grc20_entities.extend(created_entities)
+        grc20_relations.extend(created_relations)
         
         processed_count += 1
         
@@ -738,32 +793,38 @@ def convert_dataset_to_grc20(input_file, output_file, progress=None):
     print_progress_bar(len(parent_inserts), len(parent_inserts), progress=progress)
     print("\n")
     
-    # Create proper GRC-20 structure with entities wrapper
-    grc20_data = {
-        'entities': grc20_entities
-    }
+    # Save as JSONL files (GRC-20 standard format)
+    entities_file = output_file.replace('.json', '_entities.jsonl')
+    relations_file = output_file.replace('.json', '_relations.jsonl')
     
-    # Save the converted data
-    with open(output_file, 'w') as f:
-        json.dump(grc20_data, f, indent=2)
+    with open(entities_file, 'w') as f:
+        for entity in grc20_entities:
+            f.write(json.dumps(entity) + '\n')
+    
+    with open(relations_file, 'w') as f:
+        for relation in grc20_relations:
+            f.write(json.dumps(relation) + '\n')
     
     print("=" * 80)
     print(" CONVERSION COMPLETE")
     print("=" * 80)
     print(f" RESULTS:")
     print(f"   • Parent inserts processed: {len(parent_inserts):,}")
-    print(f"   • Type entities created: {0}")
     print(f"   • PackageInsert entities created: {len(parent_inserts):,}")
-    print(f"   • Manufacturer entities created: {len(manufacturer_entities):,}")
+    print(f"   • Manufacturer entities created: {len(manufacturer_ids):,}")
     print(f"   • Section entities created: {section_count:,}")
+    print(f"   • Relations created: {len(grc20_relations):,}")
     print(f"   • Inserts with descriptions: {description_count:,}")
     print(f"   • Total GRC-20 entities: {len(grc20_entities):,}")
     print(f"   • Average sections per insert: {section_count/len(parent_inserts):.1f}")
-    print(f"   • Output file: {output_file}")
-    print(f"   • File size: {os.path.getsize(output_file)/1024/1024:.1f} MB")
+    print(f"   • Entities file: {entities_file}")
+    print(f"   • Relations file: {relations_file}")
+    entities_size = os.path.getsize(entities_file)/1024/1024
+    relations_size = os.path.getsize(relations_file)/1024/1024
+    print(f"   • File sizes: {entities_size:.1f} MB + {relations_size:.1f} MB")
     
     # Display sample entities
-    display_sample_entities(output_file)
+    display_sample_entities(entities_file)
     
     # Run the FIXED compliance check
     scores, overall_score = check_compliance_fixed(grc20_entities)

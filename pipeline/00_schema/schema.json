@@ -1,0 +1,732 @@
+{
+  "metadata": {
+    "version": "4.0.0",
+    "created": "2026-03-19T00:19:05.797381",
+    "description": "Pharma Knowledge Graph Schema v4 - UUID-based, Property terminology"
+  },
+  "types": [
+    {
+      "id": "872c3315c0535e9ab732cc59315e8de8",
+      "name": "Ingredient",
+      "description": "Active pharmaceutical ingredient (IN)",
+      "tty": "IN"
+    },
+    {
+      "id": "6b18f15461c25b71ac160c7f1521f1d3",
+      "name": "PreciseIngredient",
+      "description": "Precise ingredient - salt form (PIN)",
+      "tty": "PIN"
+    },
+    {
+      "id": "d97e571b44ea59efac98a94924f1a13a",
+      "name": "MultipleIngredient",
+      "description": "Multiple ingredient combination (MIN)",
+      "tty": "MIN"
+    },
+    {
+      "id": "72b2529849a550059f30786ce70baeec",
+      "name": "SpecificSubstance",
+      "description": "Specific substance (SU)",
+      "tty": "SU"
+    },
+    {
+      "id": "3d12ae1650f35456854fa939aeb94e2a",
+      "name": "ClinicalDrugComponent",
+      "description": "Semantic Clinical Drug Component (SCDC)",
+      "tty": "SCDC"
+    },
+    {
+      "id": "8c8b44c70f755dae959f5bc046d811ea",
+      "name": "ClinicalDrugForm",
+      "description": "Semantic Clinical Drug Form (SCDF)",
+      "tty": "SCDF"
+    },
+    {
+      "id": "087fe30629f95f1bae5717725032328e",
+      "name": "ClinicalDrugGroup",
+      "description": "Semantic Clinical Drug Group (SCDG)",
+      "tty": "SCDG"
+    },
+    {
+      "id": "90c5e27051c05bd49738321862f71d3d",
+      "name": "ClinicalDrugGroupPrecise",
+      "description": "Semantic Clinical Drug Group Precise (SCDGP)",
+      "tty": "SCDGP"
+    },
+    {
+      "id": "02ee5c381f55585485547fbed6b47a79",
+      "name": "ClinicalDrug",
+      "description": "Semantic Clinical Drug (SCD)",
+      "tty": "SCD"
+    },
+    {
+      "id": "3c9b039a3ea25af0b70d5bb88f22a8b1",
+      "name": "BrandedDrugComponent",
+      "description": "Semantic Branded Drug Component (SBDC)",
+      "tty": "SBDC"
+    },
+    {
+      "id": "25604202f54955148ad093caa37d6093",
+      "name": "BrandedDrugForm",
+      "description": "Semantic Branded Drug Form (SBDF)",
+      "tty": "SBDF"
+    },
+    {
+      "id": "12043bb951c654b4b2a89302c7446cc0",
+      "name": "BrandedDrugGroup",
+      "description": "Semantic Branded Drug Group (SBDG)",
+      "tty": "SBDG"
+    },
+    {
+      "id": "ab53698cdc9b59ae9b48b6f8131254b3",
+      "name": "BrandedDrug",
+      "description": "Semantic Branded Drug (SBD)",
+      "tty": "SBD"
+    },
+    {
+      "id": "702b256eb8b050daa4c359ff7532ac52",
+      "name": "BrandName",
+      "description": "Brand name for a drug (BN)",
+      "tty": "BN"
+    },
+    {
+      "id": "4ea77a9d940058c8ab1661139ad9a119",
+      "name": "DoseForm",
+      "description": "Dosage form (DF)",
+      "tty": "DF"
+    },
+    {
+      "id": "16b2da99a0c25c02a771ddeca90aa01d",
+      "name": "DoseFormGroup",
+      "description": "Dose form group (DFG)",
+      "tty": "DFG"
+    },
+    {
+      "id": "fe41d17b4cc653bdb2df66c60050470d",
+      "name": "GenericPack",
+      "description": "Generic pack (GPCK)",
+      "tty": "GPCK"
+    },
+    {
+      "id": "613d979f295a56e89d32a4238e7902dd",
+      "name": "BrandPack",
+      "description": "Brand pack (BPCK)",
+      "tty": "BPCK"
+    },
+    {
+      "id": "10355cecd79e5fb1b54d284e06dfb428",
+      "name": "PrescribableName",
+      "description": "Prescribable name (PSN)",
+      "tty": "PSN"
+    },
+    {
+      "id": "b24bc2abab945bbe93185f6cdd5ba2fa",
+      "name": "Synonym",
+      "description": "Synonym (SY)",
+      "tty": "SY"
+    },
+    {
+      "id": "56b9b75206bb5452a11cb39dfb564ab3",
+      "name": "TallManSynonym",
+      "description": "Tall man synonym (TMSY)",
+      "tty": "TMSY"
+    },
+    {
+      "id": "70f77257866a5fd6a600fff8e6675e02",
+      "name": "DrugProduct",
+      "description": "Drug product (NDDF DP)",
+      "tty": "DP"
+    },
+    {
+      "id": "506b6136d24b5fe582b7e13ef24aca2b",
+      "name": "MTHDrugProduct",
+      "description": "MTH drug product",
+      "tty": "MTH_RXN_DP"
+    },
+    {
+      "id": "0af427a2b7df5f6dbdb4fb86a54359fd",
+      "name": "PackageInsert",
+      "description": "FDA drug label/package insert document",
+      "tty": null
+    },
+    {
+      "id": "0a3ca69483c45be1a959deed6a271c62",
+      "name": "Manufacturer",
+      "description": "Drug manufacturer or labeler company",
+      "tty": null
+    },
+    {
+      "id": "76fa853e896f5354b4f2d9d3f86f4261",
+      "name": "NDC",
+      "description": "National Drug Code identifier",
+      "tty": null
+    },
+    {
+      "id": "bf18230767f55134938b218f276a8582",
+      "name": "Provenance",
+      "description": "Data source provenance",
+      "tty": null
+    },
+    {
+      "id": "7c29d4d3397c5438a4acec897279c3de",
+      "name": "Section",
+      "description": "Document section (e.g., drug label section)",
+      "tty": null
+    },
+    {
+      "id": "4822b22d31575791948e17f478af3a03",
+      "name": "DrugClass",
+      "description": "Drug classification or category",
+      "tty": null
+    },
+    {
+      "id": "9957bde775b75993a4fdc1629b91a6e7",
+      "name": "Relation",
+      "description": "GRC-20 relation entity (edge between nodes)",
+      "tty": null
+    }
+  ],
+  "properties": [
+    {
+      "id": "a126ca530c8e48d5b88882c734c38935",
+      "name": "name",
+      "value_type": "TEXT",
+      "description": "Primary name or label"
+    },
+    {
+      "id": "c6f36f8a8e22546ea7618ac008d2f91e",
+      "name": "rxcui",
+      "value_type": "TEXT",
+      "description": "RxNorm Concept Unique Identifier"
+    },
+    {
+      "id": "fd0c76eae47c55bbac4cca96203752c1",
+      "name": "tty",
+      "value_type": "TEXT",
+      "description": "RxNorm Term Type"
+    },
+    {
+      "id": "9a38ee871c3e539e913214a93acd9b6e",
+      "name": "rela_code",
+      "value_type": "TEXT",
+      "description": "Raw RxNorm relationship code (RO/RN/RB)"
+    },
+    {
+      "id": "41ac105d8aa252f5b8259a21b2f547d0",
+      "name": "source_tty",
+      "value_type": "TEXT",
+      "description": "Source term type for relationship"
+    },
+    {
+      "id": "8dd5dd093a06511fb98fba72f8dad11e",
+      "name": "target_tty",
+      "value_type": "TEXT",
+      "description": "Target term type for relationship"
+    },
+    {
+      "id": "bdd863e095365bbea65deae8ebf1e81b",
+      "name": "pubchem_cid",
+      "value_type": "NUMBER",
+      "description": "PubChem Compound ID"
+    },
+    {
+      "id": "56e99a1b93b2573689e2f6a6c662df10",
+      "name": "smiles",
+      "value_type": "TEXT",
+      "description": "SMILES molecular structure"
+    },
+    {
+      "id": "6b432fc791ad5358b1f17fdc6abcfacc",
+      "name": "inchikey",
+      "value_type": "TEXT",
+      "description": "InChIKey identifier"
+    },
+    {
+      "id": "5fbf742a110d508abc9af6a1cd1e49e7",
+      "name": "iupac_name",
+      "value_type": "TEXT",
+      "description": "IUPAC systematic name"
+    },
+    {
+      "id": "142b832ceb175b31a9becc432f8fb568",
+      "name": "molecular_formula",
+      "value_type": "TEXT",
+      "description": "Molecular formula"
+    },
+    {
+      "id": "20aba01a611d57e1bb02ca665dd61acd",
+      "name": "molecular_weight",
+      "value_type": "NUMBER",
+      "description": "Molecular weight in Daltons"
+    },
+    {
+      "id": "694ec99a6c8e555caba8d8bb72f302c8",
+      "name": "ndc_code",
+      "value_type": "TEXT",
+      "description": "National Drug Code"
+    },
+    {
+      "id": "78d0af3db973513e8be0cb76afa5e9c4",
+      "name": "fda_set_id",
+      "value_type": "TEXT",
+      "description": "FDA SET ID for package insert"
+    },
+    {
+      "id": "220842e76a3f5a558d90d4a9900c7cf6",
+      "name": "effective_time",
+      "value_type": "TIME",
+      "description": "Effective date/time of drug label"
+    },
+    {
+      "id": "fb191ea1c3f6509cb855cb7874f126e0",
+      "name": "content",
+      "value_type": "TEXT",
+      "description": "Text content of a document section"
+    },
+    {
+      "id": "75759154dbfa5408a945cdb1b7568404",
+      "name": "set_id",
+      "value_type": "TEXT",
+      "description": "Unique identifier for document set"
+    },
+    {
+      "id": "71641beff75757c896e1e0f276c59dc8",
+      "name": "pubchem_date",
+      "value_type": "TIME",
+      "description": "PubChem data retrieval date"
+    },
+    {
+      "id": "c2842d1831e35b2f82fb74b532f4508b",
+      "name": "pmid",
+      "value_type": "TEXT",
+      "description": "PubMed ID reference"
+    },
+    {
+      "id": "67409ee3611d533d8406ee1b7671908b",
+      "name": "sid",
+      "value_type": "TEXT",
+      "description": "PubChem Substance ID"
+    },
+    {
+      "id": "3cc9e11445a1581b991da4ddc367dd83",
+      "name": "mesh_classes",
+      "value_type": "TEXT",
+      "description": "MeSH classification codes"
+    },
+    {
+      "id": "a6f52a44a6715b67ab67b581dfff2691",
+      "name": "source",
+      "value_type": "TEXT",
+      "description": "Data source name"
+    },
+    {
+      "id": "8f53fdb78b1d57ea966df27756f63ee2",
+      "name": "citation",
+      "value_type": "TEXT",
+      "description": "Citation for data source"
+    },
+    {
+      "id": "f45c31a409ba54e6bbd26381a9fc13cb",
+      "name": "date_accessed",
+      "value_type": "TIME",
+      "description": "Date data was accessed"
+    },
+    {
+      "id": "1aad4d5ca27257c7bb3dfb2df0798511",
+      "name": "source_url",
+      "value_type": "URL",
+      "description": "URL to data source"
+    },
+    {
+      "id": "64be6ca0668757a2911735a2011822c8",
+      "name": "provenance_type",
+      "value_type": "TEXT",
+      "description": "Type of provenance: AUTOMATED, EXPERT, INFERRED, IMPORTED"
+    },
+    {
+      "id": "0c005626550a56f2a768d4aaf46d32b7",
+      "name": "section_type",
+      "value_type": "TEXT",
+      "description": "Type of document section"
+    },
+    {
+      "id": "b9b9cc9666535ee1babb864f112ffa0a",
+      "name": "sequence",
+      "value_type": "NUMBER",
+      "description": "Order sequence"
+    },
+    {
+      "id": "90a265b985445b7ab50adcdac7d41c53",
+      "name": "class_name",
+      "value_type": "TEXT",
+      "description": "Drug class name"
+    },
+    {
+      "id": "533ae9a005e95813b31abb4cb6a24d7f",
+      "name": "class_type",
+      "value_type": "TEXT",
+      "description": "Classification system (ATC, MeSH, etc.)"
+    },
+    {
+      "id": "918c45ed2525555cbe5a9e02a0f47b3c",
+      "name": "class_code",
+      "value_type": "TEXT",
+      "description": "Classification code"
+    },
+    {
+      "id": "a8e8faf33ae258c6b0c4388cc168e140",
+      "name": "clinical_weight",
+      "value_type": "NUMBER",
+      "description": "Weighted clinical relationship"
+    },
+    {
+      "id": "bb5fd109f74e586ca71b5cdf095e5ab8",
+      "name": "evidence",
+      "value_type": "TEXT",
+      "description": "Evidence supporting a clinical relationship"
+    }
+  ],
+  "relations": [
+    {
+      "id": "8910b027419958f6b3c8aeeb47b9a7c4",
+      "name": "has_section",
+      "description": "Package insert has this section",
+      "inverse": "section_of"
+    },
+    {
+      "id": "1b8927eed2be5e369d64f9ab39f23c20",
+      "name": "section_of",
+      "description": "Section belongs to this package insert",
+      "inverse": "has_section"
+    },
+    {
+      "id": "bbfc2d2a73895f23870db02e161896a1",
+      "name": "manufactured_by",
+      "description": "Package insert manufactured by this company",
+      "inverse": "manufactures"
+    },
+    {
+      "id": "d00bacd0023f591ea5e0fe23d7ad405e",
+      "name": "manufactures",
+      "description": "Manufacturer produces this drug product",
+      "inverse": "manufactured_by"
+    },
+    {
+      "id": "d085f236da3c51fca583c72e7058973b",
+      "name": "has_ingredient",
+      "description": "Drug has this ingredient",
+      "inverse": "ingredient_of"
+    },
+    {
+      "id": "708910ff645b507ab5616dbd680b5802",
+      "name": "ingredient_of",
+      "description": "Ingredient is in this drug",
+      "inverse": "has_ingredient"
+    },
+    {
+      "id": "307907247a3c5be682ed242bb61a2947",
+      "name": "has_precise_ingredient",
+      "description": "Drug has this precise ingredient (salt form)",
+      "inverse": "precise_ingredient_of"
+    },
+    {
+      "id": "9147c85a51ea5a2481824d2aefe5956d",
+      "name": "precise_ingredient_of",
+      "description": "Precise ingredient is in this drug",
+      "inverse": "has_precise_ingredient"
+    },
+    {
+      "id": "73f2d9bc321054dc80888064f36282fb",
+      "name": "has_ingredients",
+      "description": "Multiple ingredients drug has",
+      "inverse": "ingredients_of"
+    },
+    {
+      "id": "f44019f93b2258119d1022c4f39b9da5",
+      "name": "ingredients_of",
+      "description": "Ingredients are in this multiple ingredient drug",
+      "inverse": "has_ingredients"
+    },
+    {
+      "id": "29f07e00f9d45f76aef7e6c03f00441b",
+      "name": "has_dose_form",
+      "description": "Drug has this dose form",
+      "inverse": "dose_form_of"
+    },
+    {
+      "id": "cbf90e604bf458719df7ad10fd90c07f",
+      "name": "dose_form_of",
+      "description": "Dose form is used by this drug",
+      "inverse": "has_dose_form"
+    },
+    {
+      "id": "d0b2263a97d651ae8e43aab87e69ea18",
+      "name": "has_doseformgroup",
+      "description": "Drug belongs to this dose form group",
+      "inverse": "doseformgroup_of"
+    },
+    {
+      "id": "b74d6b2005505263a22c10fe0ed1f591",
+      "name": "doseformgroup_of",
+      "description": "Dose form group contains this drug",
+      "inverse": "has_doseformgroup"
+    },
+    {
+      "id": "a42836a8c04757e1a995531b8ff3200b",
+      "name": "has_tradename",
+      "description": "Drug has this brand/trade name",
+      "inverse": "tradename_of"
+    },
+    {
+      "id": "dbc766b554f0579da4c7b7c29924d6a3",
+      "name": "tradename_of",
+      "description": "Brand name is for this drug",
+      "inverse": "has_tradename"
+    },
+    {
+      "id": "12a84f5c305857b782821609c5e2b59b",
+      "name": "is_a",
+      "description": "Entity is a subtype of",
+      "inverse": "inverse_isa"
+    },
+    {
+      "id": "dd9264e954d650f98f97cc5d471e5a51",
+      "name": "inverse_isa",
+      "description": "Entity is a supertype of",
+      "inverse": "is_a"
+    },
+    {
+      "id": "88c43b5be4eb5fe78b09872e9a9c3c70",
+      "name": "consists_of",
+      "description": "Drug consists of these components",
+      "inverse": "constitutes"
+    },
+    {
+      "id": "f5e289c3d13a5aaaa38b22448f7e38ab",
+      "name": "constitutes",
+      "description": "Component constitutes this drug",
+      "inverse": "consists_of"
+    },
+    {
+      "id": "ab9a31412f9e547b8029497eb30628c0",
+      "name": "contains",
+      "description": "Pack contains this drug",
+      "inverse": "contained_in"
+    },
+    {
+      "id": "987c2a6519b55e89b56eb4c83eb1465b",
+      "name": "contained_in",
+      "description": "Drug is contained in this pack",
+      "inverse": "contains"
+    },
+    {
+      "id": "94272e15b3535feab43867d3b374f608",
+      "name": "has_part",
+      "description": "Entity has this part",
+      "inverse": "part_of"
+    },
+    {
+      "id": "1df119c2ba785c688aafd35556e3fab6",
+      "name": "part_of",
+      "description": "Entity is part of this",
+      "inverse": "has_part"
+    },
+    {
+      "id": "3df206ec784d51c5a1bf724192b70a95",
+      "name": "has_form",
+      "description": "Drug has this form (salt form)",
+      "inverse": "form_of"
+    },
+    {
+      "id": "d3077c62a9875bfbace8602b42872f43",
+      "name": "form_of",
+      "description": "Form is of this drug",
+      "inverse": "has_form"
+    },
+    {
+      "id": "5d772805f394592e845a7012c25281ee",
+      "name": "reformulated_to",
+      "description": "Drug was reformulated to this",
+      "inverse": "reformulation_of"
+    },
+    {
+      "id": "92d9cccaa51a530fa54739f949d8ecff",
+      "name": "reformulation_of",
+      "description": "Drug is a reformulation of this",
+      "inverse": "reformulated_to"
+    },
+    {
+      "id": "be4078ffae3f59f49380856d4c1bd4a2",
+      "name": "has_quantified_form",
+      "description": "Drug has this quantified form",
+      "inverse": "quantified_form_of"
+    },
+    {
+      "id": "0a457d86f2d95f559bfdad696be256dc",
+      "name": "quantified_form_of",
+      "description": "Quantified form is of this drug",
+      "inverse": "has_quantified_form"
+    },
+    {
+      "id": "4ce9ae047e1d564ba8fd65e8d1e4c9ed",
+      "name": "has_boss",
+      "description": "Drug has this boss (active moiety)",
+      "inverse": "boss_of"
+    },
+    {
+      "id": "944723adb1ff558eb2c0afb78e51b18f",
+      "name": "boss_of",
+      "description": "Boss (active moiety) of this drug",
+      "inverse": "has_boss"
+    },
+    {
+      "id": "058c8fbac6035b91a55a43d5844212cb",
+      "name": "equivalent_to",
+      "description": "Entity is equivalent to",
+      "inverse": "equivalent_to"
+    },
+    {
+      "id": "4e096f6ad94b5fff833908d03cbf6a9d",
+      "name": "maps_to_rxcui",
+      "description": "NDC maps to this RxCUI",
+      "inverse": "mapped_from_ndc"
+    },
+    {
+      "id": "30d91a5829255f5c9462103d258ff1af",
+      "name": "mapped_from_ndc",
+      "description": "RxCUI is mapped from this NDC",
+      "inverse": "maps_to_rxcui"
+    },
+    {
+      "id": "40336b51fbf358408ee0cbcc808d43b6",
+      "name": "has_provenance",
+      "description": "Entity has provenance information",
+      "inverse": null
+    },
+    {
+      "id": "0e3f504a08505cd28539515075f54016",
+      "name": "has_component",
+      "description": "Ingredient has clinical drug component",
+      "inverse": "ingredient_of"
+    },
+    {
+      "id": "bc50e26cdc415429a8c140b5b1b4d6a0",
+      "name": "has_group",
+      "description": "Ingredient has clinical drug group",
+      "inverse": "group_of"
+    },
+    {
+      "id": "00ed8d30bf8456c4b33a2a4ff988ac91",
+      "name": "group_of",
+      "description": "Clinical drug group of this ingredient",
+      "inverse": "has_group"
+    },
+    {
+      "id": "b0ccdffbc16e548e812d9064a64b067f",
+      "name": "has_clinical_drug",
+      "description": "Component/form/group has clinical drug",
+      "inverse": "clinical_drug_of"
+    },
+    {
+      "id": "26688c23dc025cbc8cddd7fdad6631aa",
+      "name": "clinical_drug_of",
+      "description": "Clinical drug of this component",
+      "inverse": "has_clinical_drug"
+    },
+    {
+      "id": "2b6284f30a3a5147a2ec9f4a6f41da1d",
+      "name": "has_branded_drug",
+      "description": "Clinical drug has branded drug",
+      "inverse": "branded_drug_of"
+    },
+    {
+      "id": "9f0faaa4702956d8aaab2d4ae25a611a",
+      "name": "branded_drug_of",
+      "description": "Branded drug of this clinical drug",
+      "inverse": "has_branded_drug"
+    },
+    {
+      "id": "0e66e38d790c5e9c9a920a3168377112",
+      "name": "has_branded_component",
+      "description": "Clinical component has branded component",
+      "inverse": "branded_component_of"
+    },
+    {
+      "id": "40baad5e4ec75486a3718ae9b6618f84",
+      "name": "branded_component_of",
+      "description": "Branded component of this clinical component",
+      "inverse": "has_branded_component"
+    },
+    {
+      "id": "8b1e4c46d919506e9ed812e6e7590bb9",
+      "name": "has_branded_form",
+      "description": "Clinical form has branded form",
+      "inverse": "branded_form_of"
+    },
+    {
+      "id": "98350ff0ed20593eadac13818df49426",
+      "name": "branded_form_of",
+      "description": "Branded form of this clinical form",
+      "inverse": "has_branded_form"
+    },
+    {
+      "id": "4eb302f0a3c85a25a2986a2c1828d7c4",
+      "name": "has_branded_group",
+      "description": "Clinical group has branded group",
+      "inverse": "branded_group_of"
+    },
+    {
+      "id": "f2d18e674fab5a1b8752fc121b64c595",
+      "name": "branded_group_of",
+      "description": "Branded group of this clinical group",
+      "inverse": "has_branded_group"
+    },
+    {
+      "id": "bbb8b6159784578583ec4dc46fd10fb9",
+      "name": "has_brand_name",
+      "description": "Entity has brand name",
+      "inverse": "brand_name_of"
+    },
+    {
+      "id": "6e63472c82dc54039851b9d65e1b7709",
+      "name": "brand_name_of",
+      "description": "Brand name of this entity",
+      "inverse": "has_brand_name"
+    },
+    {
+      "id": "7add47a809c758a9bd81c0d137b8ef63",
+      "name": "has_brand",
+      "description": "Branded drug has brand",
+      "inverse": "brand_of"
+    },
+    {
+      "id": "9ffac82cc20e565eaaeefccf16e8e8e2",
+      "name": "brand_of",
+      "description": "Brand of this branded drug",
+      "inverse": "has_brand"
+    }
+  ],
+  "provenance_sources": [
+    {
+      "id": "f2b2563a4fcf58e5a1c3b45264f324ea",
+      "name": "RxNorm",
+      "citation_template": "RxNorm [Internet]. Bethesda (MD): National Library of Medicine (US); [cited {date}]. Available from: https://rxnorm.nlm.nih.gov/",
+      "source_url": "https://rxnorm.nlm.nih.gov/",
+      "provenance_type": "IMPORTED"
+    },
+    {
+      "id": "fbcb490cf4415a46a13c169f3a7eba77",
+      "name": "PubChem",
+      "citation_template": "PubChem [Internet]. Bethesda (MD): National Library of Medicine (US); [cited {date}]. Available from: https://pubchem.ncbi.nlm.nih.gov/",
+      "source_url": "https://pubchem.ncbi.nlm.nih.gov/",
+      "provenance_type": "IMPORTED"
+    },
+    {
+      "id": "be4dc5ff13bf54de8c047d9e5cd43cf8",
+      "name": "DailyMed",
+      "citation_template": "DailyMed [Internet]. Bethesda (MD): National Library of Medicine (US); [cited {date}]. Available from: https://dailymed.nlm.nih.gov/",
+      "source_url": "https://dailymed.nlm.nih.gov/",
+      "provenance_type": "IMPORTED"
+    }
+  ]
+}

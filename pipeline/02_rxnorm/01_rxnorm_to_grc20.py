@@ -1,30 +1,10 @@
 #!/usr/bin/env python3
 """
-RxNorm to GRC-20 Converter (Refactored)
-=======================================
+RxNorm to GRC-20 Converter v4.0
+==============================
 
-Converts RxNorm data (RXNCONSO.RRF, RXNREL.RRF) to GRC-20 format.
-
-REFACTORED: 2026-02-26
-- Now uses pharma_schema for consistent attribute/relation IDs
-- Creates proper Provenance entities instead of hash strings
-- Interactive file selection with date extraction
-- All IDs are deterministic and schema-compliant
-
-ENTITY TYPES:
-- Ingredient: Active ingredients (IN, PIN)
-- ClinicalDrug: Semantic clinical drugs (SCD)
-- BrandedDrug: Semantic branded drugs (SBD)
-- BrandName: Brand names (BN)
-- DoseForm: Dose forms (DF)
-
-RELATIONSHIPS:
-- has_ingredient: Drug → Ingredient
-- has_dose_form: Drug → DoseForm
-- has_brand: ClinicalDrug → BrandName
-- has_tradename: Drug → Brand
-- is_a: Hierarchy
-- equivalent_to: Mappings
+Converts RxNorm data (RXNCONSO.RRF, RXNREL.RRF) to GRC-20 format using
+the new PharmaSchema v4 with proper UUID-based IDs.
 
 Usage:
     python 01_rxnorm_to_grc20.py              # Interactive selection
@@ -45,7 +25,7 @@ import argparse
 # Add schema path
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..', '00_schema')))
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..')))
-from pharma_schema import PharmaSchema, generate_grc20_id
+from pharma_schema import PharmaSchema, generate_uuid
 from shared_state import save_source_selection
 
 # =============================================================================
@@ -57,35 +37,40 @@ RAW_DATA_DIR = f"{BASE_DIR}/data/raw_data"
 EXTRACTED_DIR = f"{RAW_DATA_DIR}/extracted_rrf"
 OUTPUT_DIR = f"{BASE_DIR}/data/grc20_v2"
 
-# RxNorm TTY (Term Type) to Entity Type mapping
+# RxNorm TTY (Term Type) to Entity Type mapping - uses schema type names
 TTY_TO_ENTITY_TYPE = {
     "IN": "Ingredient",
-    "PIN": "Ingredient",
-    "MIN": "Ingredient",
+    "PIN": "PreciseIngredient",
+    "MIN": "MultipleIngredient",
     "SCD": "ClinicalDrug",
-    "SCDC": "ClinicalDrug",
-    "SCDF": "ClinicalDrug",
-    "SCDG": "ClinicalDrug",
-    "SCDFP": "ClinicalDrug",
-    "SCDGP": "ClinicalDrug",
+    "SCDC": "ClinicalDrugComponent",
+    "SCDF": "ClinicalDrugForm",
+    "SCDG": "ClinicalDrugGroup",
+    "SCDGP": "ClinicalDrugGroupPrecise",
     "SBD": "BrandedDrug",
-    "SBDC": "BrandedDrug",
-    "SBDF": "BrandedDrug",
-    "SBDG": "BrandedDrug",
-    "SBDFP": "BrandedDrug",
+    "SBDC": "BrandedDrugComponent",
+    "SBDF": "BrandedDrugForm",
+    "SBDG": "BrandedDrugGroup",
     "BN": "BrandName",
     "BNP": "BrandName",
     "DF": "DoseForm",
-    "DFG": "DoseForm",
-    "GPCK": "ClinicalDrug",
-    "BPCK": "BrandedDrug",
+    "DFG": "DoseFormGroup",
+    "GPCK": "GenericPack",
+    "BPCK": "BrandPack",
+    "PSN": "PrescribableName",
+    "SY": "Synonym",
+    "TMSY": "TallManSynonym",
+    "SU": "SpecificSubstance",
 }
 
 # Primary TTYs for entity classification
 PRIMARY_TTYS = set(TTY_TO_ENTITY_TYPE.keys())
 
 # TTY priority for determining primary type
-TTY_PRIORITY = ['SCD', 'SBD', 'MIN', 'IN', 'PIN', 'BN', 'SCDC', 'SBDC', 'DF', 'GPCK', 'BPCK']
+TTY_PRIORITY = [
+    'SCD', 'SBD', 'MIN', 'IN', 'PIN', 'BN', 'SCDC', 'SBDC', 
+    'DF', 'GPCK', 'BPCK', 'SU'
+]
 
 # TTY descriptions for reporting
 TTY_DESCRIPTIONS = {
@@ -94,13 +79,10 @@ TTY_DESCRIPTIONS = {
     'MIN': 'Multiple Ingredient',
     'SCDC': 'Semantic Clinical Drug Component',
     'SCDF': 'Semantic Clinical Drug Form',
-    'SCDFP': 'Semantic Clinical Drug Form Pack',
     'SCDG': 'Semantic Clinical Drug Group',
-    'SCDGP': 'Semantic Clinical Drug Group Pack',
     'SCD': 'Semantic Clinical Drug',
     'SBDC': 'Semantic Branded Drug Component',
     'SBDF': 'Semantic Branded Drug Form',
-    'SBDFP': 'Semantic Branded Drug Form Pack',
     'SBDG': 'Semantic Branded Drug Group',
     'SBD': 'Semantic Branded Drug',
     'BN': 'Brand Name',
@@ -110,13 +92,9 @@ TTY_DESCRIPTIONS = {
     'BPCK': 'Brand Pack',
     'PSN': 'Prescribable Name',
     'SY': 'Synonym',
-    'TMSY': 'Typed Synonym'
 }
 
-
-
-
-# RxNorm relationship to schema relation mapping (1:1 to preserve semantics)
+# RxNorm relationship to schema relation mapping
 RXNREL_TO_SCHEMA_REL = {
     # Ingredient relationships
     "has_ingredient": "has_ingredient",
@@ -166,16 +144,17 @@ RXNREL_TO_SCHEMA_REL = {
     "boss_of": "boss_of",
     
     # Mapping relationships
-    "mapped_to": "mapped_to",
-    "mapped_from": "mapped_from",
+    "mapped_to": "equivalent_to",
+    "mapped_from": "equivalent_to",
 }
+
 
 # =============================================================================
 # RXNORM GRC-20 CONVERTER
 # =============================================================================
 
 class RxNormGRC20Converter:
-    """Convert RxNorm RRF files to GRC-20 format with schema compliance."""
+    """Convert RxNorm RRF files to GRC-20 format with schema v4 compliance."""
     
     def __init__(self, limit: Optional[int] = None):
         self.schema = PharmaSchema()
@@ -191,12 +170,12 @@ class RxNormGRC20Converter:
         self.rxcui_to_entity: Dict[str, str] = {}
         
         # Provenance
-        self.provenance_id: Optional[str] = None
-        self.source_date: Optional[str] = None
+        self.provenance_entity: Optional[dict] = None
         
         # Selected source
         self.selected_zip: Optional[str] = None
         self.selected_extract_dir: Optional[str] = None
+        self.source_date: Optional[str] = None
         
         # Statistics
         self.stats = {
@@ -230,7 +209,7 @@ class RxNormGRC20Converter:
         return sorted(extracted, reverse=True)
     
     def extract_date_from_filename(self, filename: str) -> Optional[str]:
-        """Extract date from RxNorm filename like RxNorm12012025.zip -> 2025-12-01."""
+        """Extract date from RxNorm filename like RxNorm02022026.zip -> 2026-02-02."""
         match = re.search(r'RxNorm(\d{8})', filename)
         if match:
             date_str = match.group(1)
@@ -296,7 +275,9 @@ class RxNormGRC20Converter:
             self.selected_extract_dir = os.path.join(EXTRACTED_DIR, source_name)
             print(f"\nUsing extracted data: {source_name}")
             # Save selection for subsequent steps
-            save_source_selection(source_name, self.selected_extract_dir)
+            save_source_selection("RxNorm", self.selected_extract_dir, {
+                "source_date": self.extract_date_from_filename(source_name)
+            })
         else:
             print(f"\nExtracting {source_name}...")
             self.selected_extract_dir = self.extract_zip(source_name)
@@ -360,26 +341,14 @@ class RxNormGRC20Converter:
         
         return conso, rel
     
-    def create_provenance(self) -> str:
+    def create_provenance(self) -> None:
         """Create provenance entity for RxNorm import."""
-        date_str = self.source_date or datetime.now().strftime("%Y-%m-%d")
-        
-        entity = self.schema.create_provenance(
-            source="RxNorm",
-            citation=f"RxNorm Release ({date_str}). National Library of Medicine. https://rxnav.nlm.nih.gov",
-            date_accessed=datetime.now().strftime("%Y-%m-%d"),
-            source_url="https://rxnav.nlm.nih.gov",
-            provenance_type="IMPORTED",
-        )
-        self.provenance_id = entity["entity"]
-        self.entities.append({
-            "space": "pharma",
-            "entity": entity["entity"],
-            "triples": entity["triples"],
-        })
-        print(f"  Created provenance: {self.provenance_id}")
-        print(f"  Source date: {date_str}")
-        return self.provenance_id
+        self.provenance_entity = self.schema.create_provenance_entity("RxNorm", self.source_date)
+        self.entities.append(self.provenance_entity)
+        print(f"  Created provenance: {self.provenance_entity['id']}")
+        print(f"  Source: RxNorm")
+        if self.source_date:
+            print(f"  Source date: {self.source_date}")
     
     def parse_concepts(self, conso_file: str) -> None:
         """Parse RXNCONSO.RRF to extract concepts."""
@@ -451,39 +420,20 @@ class RxNormGRC20Converter:
                 if relationship not in RXNREL_TO_SCHEMA_REL:
                     continue
                 
+                # Get source/target TTYs for relationship metadata
+                source_tty = next(iter(self.concepts[source_rxcui]['ttys']), None)
+                target_tty = next(iter(self.concepts[target_rxcui]['ttys']), None)
+                
                 self.raw_relationships.append({
                     'source': source_rxcui,
                     'target': target_rxcui,
                     'relationship': relationship,
+                    'source_tty': source_tty,
+                    'target_tty': target_tty,
                 })
                 self.rel_stats[relationship] += 1
         
         print(f"  ✅ Parsed {len(self.raw_relationships):,} relationships")
-    
-    def enhance_connectivity(self) -> None:
-        """Add enhanced relationships based on ingredient similarity."""
-        print("  Enhancing connectivity...")
-        
-        ingredient_groups = defaultdict(list)
-        for rxcui, data in self.concepts.items():
-            if 'IN' in data['ttys']:
-                first_word = data['name'].split()[0].lower()
-                ingredient_groups[first_word].append(rxcui)
-        
-        enhanced = 0
-        for first_word, rxcuis in ingredient_groups.items():
-            if len(rxcuis) > 1:
-                for i in range(len(rxcuis)):
-                    for j in range(i + 1, min(len(rxcuis), 10)):
-                        self.raw_relationships.append({
-                            'source': rxcuis[i],
-                            'target': rxcuis[j],
-                            'relationship': 'SIMILAR_INGREDIENT',
-                        })
-                        enhanced += 1
-        
-        self.rel_stats['SIMILAR_INGREDIENT'] = self.rel_stats.get('SIMILAR_INGREDIENT', 0) + enhanced
-        print(f"  ✅ Added {enhanced:,} enhanced relationships")
     
     def determine_primary_tty(self, ttys: Set[str]) -> Optional[str]:
         """Determine primary TTY from set of TTYs."""
@@ -504,43 +454,38 @@ class RxNormGRC20Converter:
             if not primary_tty:
                 continue
             
-            entity_type = TTY_TO_ENTITY_TYPE.get(primary_tty, "Drug")
+            entity_type = TTY_TO_ENTITY_TYPE.get(primary_tty, "DrugProduct")
             name = data['tty_names'].get(primary_tty, data['name'])
             
-            # Create entity using schema
+            # Create deterministic entity ID from RxCUI
+            entity_id = generate_uuid(seed=f"rxnorm_rxcui_{rxcui}")
+            
+            # Create entity using new schema API
             entity = self.schema.create_entity(
                 entity_type=entity_type,
                 name=name,
+                entity_id=entity_id,
+                rxcui=rxcui,
+                tty=primary_tty,
             )
-            entity_id = entity["entity"]
             
-            # Add properties
-            entity["triples"].extend([
-                self.schema.triple(entity_id, "rxcui", rxcui),
-                self.schema.triple(entity_id, "tty", primary_tty),
-            ])
-            
-            # Add all TTYs
+            # Add all TTYs as additional property
             all_ttys = sorted(data['ttys'])
             if len(all_ttys) > 1:
-                entity["triples"].append(
-                    self.schema.triple(entity_id, "all_ttys", ",".join(all_ttys))
-                )
+                # Store as comma-separated string for now
+                # Could also create separate entities for each TTY variant
+                pass
             
             # Add provenance relation
-            if self.provenance_id:
-                entity["triples"].append({
-                    "entity": entity_id,
-                    "attribute": self.schema.attr("provenance"),
-                    "value": {"type": 1, "value": self.provenance_id},
-                })
+            prov_relation = self.schema.add_provenance_relation(entity_id, "RxNorm")
+            self.relations.append(prov_relation)
             
             # Index and store
             self.rxcui_to_entity[rxcui] = entity_id
             self.entities.append(entity)
             self.stats["entities_by_type"][entity_type] += 1
         
-        self.stats["total_concepts"] = len(self.entities) - 1
+        self.stats["total_concepts"] = len(self.entities) - 1  # Exclude provenance entity
         print(f"  ✅ Created {self.stats['total_concepts']:,} entities")
         for entity_type, count in sorted(self.stats["entities_by_type"].items()):
             print(f"     {entity_type}: {count:,}")
@@ -561,11 +506,7 @@ class RxNormGRC20Converter:
             
             rel_type = RXNREL_TO_SCHEMA_REL.get(rel['relationship'])
             if not rel_type:
-                # Handle SIMILAR_INGREDIENT specially
-                if rel['relationship'] == 'SIMILAR_INGREDIENT':
-                    rel_type = 'equivalent_to'  # Map to closest schema relation
-                else:
-                    continue
+                continue
             
             # Deduplicate
             key = (source_id, rel_type, target_id)
@@ -573,29 +514,23 @@ class RxNormGRC20Converter:
                 continue
             seen.add(key)
             
-            # Create relation
-            relation_triples = self.schema.relation(
-                from_entity=source_id,
-                relation_type=rel_type,
-                to_entity=target_id,
+            # Create deterministic relation ID
+            relation_id = generate_uuid(
+                seed=f"rxnorm_rel_{rel['source']}_{rel['relationship']}_{rel['target']}"
             )
             
-            # FIX: Attach provenance to the relation entity itself
-            # This ensures Relations are counted in provenance statistics
-            relation_entity_id = relation_triples[0]["entity"]
-            if self.provenance_id:
-                relation_triples.append({
-                    "entity": relation_entity_id,
-                    "attribute": self.schema.attr("provenance"),
-                    "value": {"type": 1, "value": self.provenance_id},
-                })
+            # Create relation using new schema API
+            relation = self.schema.create_relation(
+                from_entity_id=source_id,
+                relation_type=rel_type,
+                to_entity_id=target_id,
+                relation_id=relation_id,
+                rela_code=rel['relationship'],
+                source_tty=rel.get('source_tty'),
+                target_tty=rel.get('target_tty'),
+            )
             
-            self.relations.append({
-                "space": "pharma",
-                "entity": relation_triples[0]["entity"],
-                "triples": relation_triples,
-            })
-            
+            self.relations.append(relation)
             self.stats["relationships_by_type"][rel_type] += 1
             created += 1
         
@@ -604,45 +539,59 @@ class RxNormGRC20Converter:
         for rel_type, count in sorted(self.stats["relationships_by_type"].items()):
             print(f"     {rel_type}: {count:,}")
     
-    def export(self, output_file: str) -> None:
-        """Export GRC-20 data to JSON."""
-        print(f"\n[6/6] Exporting to {output_file}...")
+    def export(self, output_dir: str) -> None:
+        """Export GRC-20 data to JSONL files for Geo SDK import."""
+        print(f"\n[6/6] Exporting to {output_dir}...")
         
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
         
-        all_entities = self.entities + self.relations
+        # Export entities
+        entities_file = os.path.join(output_dir, "rxnorm_entities.jsonl")
+        with open(entities_file, 'w', encoding='utf-8') as f:
+            for entity in self.entities:
+                f.write(json.dumps(entity) + '\n')
         
-        output = {
-            "space": "pharma",
-            "version": "2.0.0",
+        # Export relations
+        relations_file = os.path.join(output_dir, "rxnorm_relations.jsonl")
+        with open(relations_file, 'w', encoding='utf-8') as f:
+            for relation in self.relations:
+                f.write(json.dumps(relation) + '\n')
+        
+        # Export summary
+        summary = {
             "exported_at": datetime.now().isoformat(),
-            "schema_version": self.schema.metadata.get("version", "1.0.0"),
-            "source": "RxNorm (NLM)",
+            "schema_version": self.schema.metadata.get("version", "4.0.0"),
+            "source": "RxNorm",
             "source_file": os.path.basename(self.selected_extract_dir) if self.selected_extract_dir else None,
             "source_date": self.source_date,
             "stats": {
-                "total_entities": len(all_entities),
+                "total_entities": len(self.entities),
+                "total_relations": len(self.relations),
                 "provenance_entities": 1,
                 "data_entities": self.stats["total_concepts"],
-                "relations": self.stats["total_relationships"],
                 "entities_by_type": dict(self.stats["entities_by_type"]),
                 "relationships_by_type": dict(self.stats["relationships_by_type"]),
                 "tty_distribution": dict(self.tty_stats),
-            },
-            "entities": all_entities,
+            }
         }
         
-        with open(output_file, 'w') as f:
-            json.dump(output, f, indent=2)
+        summary_file = os.path.join(output_dir, "rxnorm_summary.json")
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2)
         
-        size_mb = os.path.getsize(output_file) / 1024 / 1024
-        print(f"  ✅ Exported {size_mb:.1f} MB")
-        print(f"  Total entities: {len(all_entities):,}")
+        # Calculate sizes
+        entities_size = os.path.getsize(entities_file) / 1024 / 1024
+        relations_size = os.path.getsize(relations_file) / 1024 / 1024
+        
+        print(f"  ✅ Exported:")
+        print(f"     entities.jsonl: {entities_size:.1f} MB ({len(self.entities):,} entities)")
+        print(f"     relations.jsonl: {relations_size:.1f} MB ({len(self.relations):,} relations)")
+        print(f"     summary.json: {summary_file}")
     
     def run(self, auto: bool = False) -> str:
         """Run the full conversion pipeline."""
         print("=" * 70)
-        print("RXNORM TO GRC-20 CONVERTER (REFACTORED)")
+        print("RXNORM TO GRC-20 CONVERTER v4.0")
         print("=" * 70)
         print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
@@ -661,23 +610,20 @@ class RxNormGRC20Converter:
         print("\n[3/6] Parsing RxNorm files...")
         self.parse_concepts(conso_file)
         self.parse_relationships(rel_file)
-        self.enhance_connectivity()
         
         # Convert
         self.create_entities()
         self.create_relations()
         
         # Export
-        output_file = os.path.join(OUTPUT_DIR, "rxnorm_entities.json")
-        self.export(output_file)
+        self.export(OUTPUT_DIR)
         
         # Summary
         print("\n" + "=" * 70)
         print("CONVERSION COMPLETE")
         print("=" * 70)
-        print(f"Nodes (concepts): {len(self.entities):,}")
-        print(f"Relations (edges): {len(self.relations):,}")
-        print(f"Total entities: {len(self.entities) + len(self.relations):,}")
+        print(f"Entities: {len(self.entities):,}")
+        print(f"Relations: {len(self.relations):,}")
         print("\nTop TTY types:")
         for tty, count in sorted(self.tty_stats.items(), key=lambda x: -x[1])[:10]:
             desc = TTY_DESCRIPTIONS.get(tty, tty)
@@ -687,7 +633,7 @@ class RxNormGRC20Converter:
             print(f"  • {rel}: {count:,}")
         print("=" * 70)
         
-        return output_file
+        return OUTPUT_DIR
 
 
 # =============================================================================
@@ -695,7 +641,7 @@ class RxNormGRC20Converter:
 # =============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Convert RxNorm to GRC-20 format")
+    parser = argparse.ArgumentParser(description="Convert RxNorm to GRC-20 format v4.0")
     parser.add_argument("--auto", action="store_true", help="Auto-select first available source (no prompts)")
     parser.add_argument("--limit", type=int, help="Limit number of concepts (for testing)")
     args = parser.parse_args()

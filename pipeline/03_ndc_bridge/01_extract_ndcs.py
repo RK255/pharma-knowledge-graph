@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """
-NDC Extractor v3
+NDC Extractor v4
 ================
 Extract NDCs from RXNSAT.RRF with proper format normalization.
 Outputs:
-  - ndc_normalized_v2.txt (NDCs with sources)
   - ndc_to_rxcui.json (NDC → RxCUI mapping for GRC-20 bridge)
 
 Handles: 11-digit, 5-4-2, 5-3-2, 4-4-2 formats
+
+Usage:
+    python 01_extract_ndcs.py              # Interactive selection
+    python 01_extract_ndcs.py --auto       # Use most recent
+    python 01_extract_ndcs.py --source-date 2026-02-02  # Match specific date
 """
 
 import argparse
-import os
-import argparse
 import json
+import os
+import sys
 from datetime import datetime
 from collections import defaultdict
 
@@ -21,6 +25,11 @@ BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
 RAW_DATA_DIR = f"{BASE_DIR}/data/raw_data"
 EXTRACTED_DIR = f"{RAW_DATA_DIR}/extracted_rrf"
 OUTPUT_DIR = f"{BASE_DIR}/data/raw_data"
+
+# Add shared_state for source tracking
+sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..')))
+from shared_state import load_source_selection, save_source_selection
+
 
 def normalize_ndc_to_542(ndc_str: str) -> str:
     """
@@ -67,8 +76,8 @@ def normalize_ndc_to_542(ndc_str: str) -> str:
     return ndc_str.strip()
 
 
-def find_rxnsat_file(source_date=None):
-    """Find the most recent RXNSAT.RRF file."""
+def find_rxnsat_file(source_date=None, auto=False):
+    """Find the RXNSAT.RRF file."""
     extracted_dirs = []
     if os.path.exists(EXTRACTED_DIR):
         for subdir in sorted(os.listdir(EXTRACTED_DIR), reverse=True):
@@ -79,58 +88,79 @@ def find_rxnsat_file(source_date=None):
     if not extracted_dirs:
         raise FileNotFoundError("No RXNSAT.RRF found")
     
+    # Check for saved source selection from RxNorm step
+    saved = load_source_selection("RxNorm")
+    if saved and not source_date:
+        saved_date = saved.get("metadata", {}).get("source_date")
+        if saved_date:
+            source_date = saved_date
+            print(f"Using source date from RxNorm step: {source_date}")
+    
     # Auto-select if source_date provided
     if source_date:
         # Handle both YYYY-MM-DD and MMDDYYYY formats
-        # source_date like "2026-02-02" should match "RxNorm02022026" (MMDDYYYY)
         date_parts = source_date.split("-")
         if len(date_parts) == 3:
             y, m, d = date_parts
-            mmddyyyy = f"{m}{d}{y}"  # 02022026
-            yyyymmdd = f"{y}{m}{d}"  # 20260202
+            mmddyyyy = f"{m}{d}{y}"
         else:
             mmddyyyy = source_date
-            yyyymmdd = source_date
         
         for name, path in extracted_dirs:
-            if mmddyyyy in name or yyyymmdd in name:
+            if mmddyyyy in name:
                 print(f"\nAuto-selected: {name} (matched source_date: {source_date})")
-                return path
-        print(f"\nWarning: No match for source_date {source_date}, using most recent")
-        return extracted_dirs[0][1]
+                return path, name
+    
+    if auto or len(extracted_dirs) == 1:
+        print(f"\nAuto-selected: {extracted_dirs[0][0]}")
+        return extracted_dirs[0][1], extracted_dirs[0][0]
     
     print("\nAvailable RXNSAT.RRF files:")
     for i, (name, path) in enumerate(extracted_dirs, 1):
         size_mb = os.path.getsize(path) / 1024 / 1024
         print(f"  [{i}] {name} ({size_mb:.1f} MB)")
     
-    if len(extracted_dirs) == 1:
-        print(f"\nUsing: {extracted_dirs[0][0]}")
-        return extracted_dirs[0][1]
-    
     try:
-        choice = int(input(f"\nSelect [1-{len(extracted_dirs)}]: ") or "1")
-        return extracted_dirs[choice - 1][1]
-    except (ValueError, IndexError):
-        return extracted_dirs[0][1]
+        choice = int(input(f"\nSelect [1-{len(extracted_dirs)}] (default: 1): ") or "1")
+        idx = max(1, min(choice, len(extracted_dirs))) - 1
+    except (ValueError, EOFError):
+        idx = 0
+    
+    return extracted_dirs[idx][1], extracted_dirs[idx][0]
 
 
-def main(source_date=None):
+def extract_date_from_filename(filename: str) -> str:
+    """Extract date from RxNorm filename like RxNorm02022026_extracted -> 2026-02-02."""
+    import re
+    match = re.search(r'RxNorm(\d{8})', filename)
+    if match:
+        date_str = match.group(1)
+        return f"{date_str[4:8]}-{date_str[:2]}-{date_str[2:4]}"
+    return None
+
+
+def main(source_date=None, auto=False):
     print("=" * 70)
-    print("NDC EXTRACTOR v3 - NDC + RxCUI Mapping")
+    print("NDC EXTRACTOR v4 - NDC + RxCUI Mapping")
     print("=" * 70)
+    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Find RXNSAT file
-    rxnsat_file = find_rxnsat_file(source_date=source_date)
+    rxnsat_file, source_name = find_rxnsat_file(source_date=source_date, auto=auto)
+    actual_source_date = extract_date_from_filename(source_name)
+    
+    # Save source selection for bridge step
+    save_source_selection("RxNorm_RXNSAT", rxnsat_file, {
+        "source_name": source_name,
+        "source_date": actual_source_date
+    })
     
     # Stats
     stats = defaultdict(int)
     ndc_data = defaultdict(lambda: {"sources": set(), "rxcuis": set()})
-    
-    # Also build reverse mapping for stats
     rxcui_to_ndcs = defaultdict(set)
     
-    print(f"\nProcessing: {rxnsat_file}")
+    print(f"\n[1/2] Processing: {rxnsat_file}")
     
     with open(rxnsat_file, 'r') as f:
         for line_num, line in enumerate(f, 1):
@@ -166,6 +196,7 @@ def main(source_date=None):
             else:
                 stats["failed_normalize"] += 1
     
+    # Stats output
     print(f"\n{'='*70}")
     print("STATISTICS")
     print(f"{'='*70}")
@@ -186,27 +217,17 @@ def main(source_date=None):
     print(f"  MTHSPL only: {mthspl_only:,}")
     print(f"  Both sources: {both:,}")
     
-    # Output 1: ndc_normalized_v2.txt (NDCs with sources)
-    output_txt = f"{OUTPUT_DIR}/ndc_normalized_v2.txt"
-    print(f"\nWriting: {output_txt}")
-    with open(output_txt, 'w') as f:
-        for ndc in sorted(ndc_data.keys()):
-            sources = ",".join(sorted(ndc_data[ndc]["sources"]))
-            f.write(f"{ndc}\t{sources}\n")
-    print(f"  ✅ Wrote {len(ndc_data):,} NDCs")
-    
-    # Output 2: ndc_to_rxcui.json (for GRC-20 bridge)
+    # Output: ndc_to_rxcui.json
     output_json = f"{OUTPUT_DIR}/ndc_to_rxcui.json"
-    print(f"\nWriting: {output_json}")
+    print(f"\n[2/2] Writing: {output_json}")
     
-    # Build ndc_to_rxcui mapping (convert sets to lists, strings for compatibility)
+    # Build mappings
     ndc_to_rxcui = {}
     for ndc, data in ndc_data.items():
         rxcuis = sorted(data["rxcuis"])
         # Store as single string if only one RxCUI, else list
         ndc_to_rxcui[ndc] = rxcuis[0] if len(rxcuis) == 1 else rxcuis
     
-    # Build reverse mapping for stats
     rxcui_to_ndcs_list = {rxcui: sorted(ndcs) for rxcui, ndcs in rxcui_to_ndcs.items()}
     
     output_data = {
@@ -221,6 +242,8 @@ def main(source_date=None):
                 "both": both
             }
         },
+        "source": source_name,
+        "source_date": actual_source_date,
         "created": datetime.now().isoformat()
     }
     
@@ -228,7 +251,7 @@ def main(source_date=None):
         json.dump(output_data, f, indent=2)
     
     size_mb = os.path.getsize(output_json) / 1024 / 1024
-    print(f"  ✅ Wrote {size_mb:.1f} MB")
+    print(f"  ✅ Wrote {size_mb:.1f} MB ({len(ndc_data):,} NDCs)")
     
     # Show sample
     print(f"\nSample NDC → RxCUI:")
@@ -240,16 +263,18 @@ def main(source_date=None):
         print(f"  {ndc} [{sources}] → {rxcuis}")
     
     print(f"\n{'='*70}")
-    print("DONE")
+    print("EXTRACTION COMPLETE")
     print(f"{'='*70}")
+    return output_json
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Extract NDC codes from RxNorm")
+    parser = argparse.ArgumentParser(description="Extract NDC codes from RxNorm RXNSAT.RRF")
+    parser.add_argument("--auto", action="store_true", help="Use most recent source (no prompts)")
     parser.add_argument("--source-date", help="Auto-select source with this date (YYYY-MM-DD)")
-    parser.add_argument("--auto", action="store_true", help="Use defaults")
     return parser.parse_args()
+
 
 if __name__ == "__main__":
     args = parse_args()
-    main(source_date=args.source_date)
+    main(source_date=args.source_date, auto=args.auto)

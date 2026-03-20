@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-GRC-20 Validation Script
-=========================
+GRC-20 Validation Script (v2)
+==============================
 Validates the final graph output against the Pharma Schema.
+Supports JSONL format with entities and relations files.
 """
 
 import json
@@ -13,7 +14,20 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent))
 from pharma_schema import PharmaSchema
 
-DATA_FILE = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/grc20_v2/grc20_with_relations.json")
+DATA_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/grc20_v2")
+ENTITIES_FILE = DATA_DIR / "grc20_merged_entities.jsonl"
+RELATIONS_FILE = DATA_DIR / "grc20_merged_relations.jsonl"
+
+
+def load_jsonl(filepath):
+    """Load records from JSONL file."""
+    records = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            if line.strip():
+                records.append(json.loads(line))
+    return records
+
 
 def main():
     print("=" * 70)
@@ -23,215 +37,223 @@ def main():
     schema = PharmaSchema()
     print(f"Schema Loaded: {schema.metadata.get('name', 'Unknown')} v{schema.metadata.get('version', 'Unknown')}")
     
-    # DYNAMIC IDs: Get them from the Schema, don't hardcode
-    # System Attributes (GRC-20 Standard)
-    type_attr_id = "Jfmby78N4BCseZinBmdVov"
-    from_attr_id = "RERshk4JoYoMC17r1qAo9J"
-    to_attr_id   = "Qx8dASiTNsxxP3rJbd4Lzd"
+    # Get IDs from schema
+    has_provenance_id = schema.relations.get("has_provenance")
+    provenance_type_id = schema.type_id("Provenance")
     
-    # Schema Attributes
-    prov_attr_id = schema.attr("provenance")
-    name_attr_id = schema.attr("name")
-    source_attr_id = schema.attr("source")
+    print(f"\nSchema IDs:")
+    print(f"  has_provenance relation: {has_provenance_id}")
+    print(f"  Provenance type: {provenance_type_id}")
     
-    print(f"System IDs:\n  Type: {type_attr_id}\n  From: {from_attr_id}\n  To: {to_attr_id}")
-    print(f"Schema IDs:\n  Provenance: {prov_attr_id}\n  Name: {name_attr_id}")
-    
-    if not DATA_FILE.exists():
-        print(f"❌ Error: Data file not found at {DATA_FILE}")
+    # Check files exist
+    if not ENTITIES_FILE.exists():
+        print(f"❌ Error: Entities file not found at {ENTITIES_FILE}")
         sys.exit(1)
-        
-    print(f"\nLoading data from {DATA_FILE.name}...")
-    with open(DATA_FILE, 'r') as f:
-        data = json.load(f)
-        entities = data if isinstance(data, list) else data.get("entities", [])
+    
+    if not RELATIONS_FILE.exists():
+        print(f"❌ Error: Relations file not found at {RELATIONS_FILE}")
+        sys.exit(1)
+    
+    print(f"\nLoading data...")
+    print(f"  Entities: {ENTITIES_FILE.name}")
+    print(f"  Relations: {RELATIONS_FILE.name}")
+    
+    entities = load_jsonl(ENTITIES_FILE)
+    relations = load_jsonl(RELATIONS_FILE)
     
     print(f"  Total entities: {len(entities):,}")
+    print(f"  Total relations: {len(relations):,}")
     
-    unknown_type_ids = defaultdict(int)
-    unknown_attr_ids = defaultdict(int)
+    # Build indexes
+    entity_ids = set()
     provenance_entities = []
-    relation_entities = []
-    provenance_map = defaultdict(int)
+    provenance_ids = set()
+    type_counts = defaultdict(int)
+    unknown_type_ids = defaultdict(int)
+    unknown_prop_ids = defaultdict(int)
+    unknown_rel_ids = defaultdict(int)
     
-    # Set of valid IDs for fast checking
-    valid_relation_ids = set(schema.relations.values())
-    # System Attribute IDs that should NOT be flagged as unknown
-    system_attr_ids = {type_attr_id, from_attr_id, to_attr_id}
-    valid_attr_ids = set(schema.attributes.values()).union(system_attr_ids)
+    # Valid IDs from schema
+    valid_type_ids = set(schema.types.values())
+    valid_prop_ids = set(schema.properties.values())
+    valid_rel_ids = set(schema.relations.values())
     
-    for e in entities:
-        entity_id = e.get("entity")
-        triples = e.get("triples", [])
-        
-        is_provenance = False
-        is_relation = False
-        prov_name = "Unknown"
-        prov_source = "Unknown"
-        
-        for t in triples:
-            attr = t.get("attribute")
-            val = t.get("value", {})
-            val_str = str(val.get("value", ""))
-            
-            # 1. Check for Relation Entities
-            if attr == from_attr_id or attr == to_attr_id:
-                is_relation = True
-                
-            # 2. Check Provenance Types
-            if attr == type_attr_id:
-                # Check if the value ID matches the Provenance Type ID in Schema
-                if val_str == schema.types.get("Provenance"):
-                    is_provenance = True
-                # Check Unknown Relation Type IDs (Only if it's a relation entity)
-                if is_relation and val_str not in valid_relation_ids:
-                    # Filter out system types like "Relation"
-                    if val_str not in ["Relation", "RelationType", "Attribute", "Type"]:
-                        unknown_type_ids[val_str] += 1
-            
-            # 3. Extract Provenance Details (Name & Source)
-            if is_provenance:
-                if attr == name_attr_id: prov_name = val_str
-                if attr == source_attr_id: prov_source = val_str
-            
-            # 4. Detect Unknown Attribute IDs
-            if attr not in valid_attr_ids:
-                unknown_attr_ids[attr] += 1
-        
-        if is_provenance:
-            provenance_entities.append({
-                "id": entity_id,
-                "source": prov_source,
-                "name": prov_name
-            })
-            provenance_map[prov_source] += 1
-            
-        if is_relation:
-            relation_entities.append(e)
-
-    # REPORTING
     print("\n" + "=" * 70)
-    print("VALIDATING RELATION ENTITIES")
+    print("VALIDATING ENTITIES")
     print("=" * 70)
     
-    total_rels = len(relation_entities)
-    incomplete_rels = 0
-    rel_type_counts = defaultdict(int)
-    unknown_rel_types = 0
-    
-    print(f"Total relation entities: {total_rels:,}")
-    
-    for rel in relation_entities:
-        triples = rel.get("triples", [])
-        has_from = False
-        has_to = False
-        rel_type_id = None
+    for entity in entities:
+        entity_id = entity.get("id")
+        entity_ids.add(entity_id)
         
-        for t in triples:
-            attr = t.get("attribute")
-            val = t.get("value", {}).get("value")
+        # Check types
+        types = entity.get("types", [])
+        for type_id in types:
+            type_counts[type_id] += 1
+            if type_id not in valid_type_ids:
+                unknown_type_ids[type_id] += 1
             
-            if attr == from_attr_id: has_from = True
-            if attr == to_attr_id: has_to = True
-            if attr == type_attr_id and val not in ["Attribute", "Relation", "RelationType"]:
-                rel_type_id = val
+            # Track provenance entities
+            if type_id == provenance_type_id:
+                provenance_entities.append(entity)
+                provenance_ids.add(entity_id)
         
-        if not has_from or not has_to:
-            incomplete_rels += 1
-        
-        # Resolve Type Name
-        type_name = "unknown"
-        if rel_type_id:
-            # Reverse lookup in schema.relations
-            type_name = next((k for k,v in schema.relations.items() if v == rel_type_id), "unknown")
-            if type_name == "unknown":
-                unknown_rel_types += 1
-        
-        rel_type_counts[type_name] += 1
+        # Check properties
+        for value in entity.get("values", []):
+            prop_id = value.get("property")
+            if prop_id and prop_id not in valid_prop_ids:
+                unknown_prop_ids[prop_id] += 1
     
-    print(f"Incomplete relations (missing from/to): {incomplete_rels}")
-    print(f"⚠️  Relations with IDs not in schema: {unknown_rel_types} (Shown as 'unknown' below)")
+    # Resolve type names
+    type_id_to_name = {v: k for k, v in schema.types.items()}
     
-    print("\nRelation Type                       Count        %")
+    print(f"\nEntity Types ({len(type_counts)} unique):")
     print("-" * 60)
-    total_valid_rels = sum(rel_type_counts.values())
-    for r_name, count in sorted(rel_type_counts.items(), key=lambda x: -x[1]):
-        pct = (count / total_valid_rels * 100) if total_valid_rels > 0 else 0
-        print(f"{r_name:30} {count:10,}   {pct:5.1f}%")
+    for type_id, count in sorted(type_counts.items(), key=lambda x: -x[1])[:15]:
+        type_name = type_id_to_name.get(type_id, "unknown")
+        pct = count / len(entities) * 100
+        print(f"  {type_name:30} {count:10,}   {pct:5.1f}%")
+    
+    if len(type_counts) > 15:
+        remaining = sum(c for t, c in type_counts.items() if type_id_to_name.get(t) not in list(type_id_to_name.keys())[:15])
+        print(f"  {'... and more':30} {remaining:10,}")
+    
+    print("\n" + "=" * 70)
+    print("VALIDATING RELATIONS")
+    print("=" * 70)
+    
+    rel_type_counts = defaultdict(int)
+    rel_missing_from = 0
+    rel_missing_to = 0
+    has_provenance_count = 0
+    entities_with_provenance = set()
+    
+    for rel in relations:
+        rel_id = rel.get("type")
+        from_id = rel.get("from")
+        to_id = rel.get("to")
+        
+        # Check relation type
+        if rel_id:
+            rel_type_counts[rel_id] += 1
+            if rel_id not in valid_rel_ids:
+                unknown_rel_ids[rel_id] += 1
+        
+        # Track has_provenance
+        if rel_id == has_provenance_id:
+            has_provenance_count += 1
+            entities_with_provenance.add(from_id)
+        
+        # Check dangling references
+        if from_id and from_id not in entity_ids:
+            rel_missing_from += 1
+        if to_id and to_id not in entity_ids:
+            rel_missing_to += 1
+    
+    # Resolve relation type names
+    rel_id_to_name = {v: k for k, v in schema.relations.items()}
+    
+    print(f"\nRelation Types ({len(rel_type_counts)} unique):")
+    print("-" * 60)
+    for rel_id, count in sorted(rel_type_counts.items(), key=lambda x: -x[1])[:15]:
+        rel_name = rel_id_to_name.get(rel_id, "unknown")
+        pct = count / len(relations) * 100
+        print(f"  {rel_name:30} {count:10,}   {pct:5.1f}%")
+    
+    if len(rel_type_counts) > 15:
+        print(f"  {'... and more':30}")
+    
+    print(f"\nDangling references:")
+    print(f"  Relations with missing 'from' entity: {rel_missing_from}")
+    print(f"  Relations with missing 'to' entity: {rel_missing_to}")
     
     print("\n" + "=" * 70)
     print("VALIDATING PROVENANCE")
     print("=" * 70)
     
-    print(f"Provenance entities: {len(provenance_entities)}\n")
-    print("Provenance Sources:")
-    for source, count in sorted(provenance_map.items()):
-        print(f"  {source}: {count:,}")
+    # Get provenance entity names
+    provenance_sources = defaultdict(int)
+    name_prop_id = schema.prop("name")
     
-    # Calculate Coverage
-    total_entities = len(entities)
-    prov_entities_count = len(provenance_entities)
-    other_entities = total_entities - prov_entities_count
+    for prov in provenance_entities:
+        name = "Unknown"
+        for value in prov.get("values", []):
+            if value.get("property") == name_prop_id:
+                name = value.get("value", "Unknown")
+                break
+        provenance_sources[name] += 1
     
-    # Count entities WITH provenance attribute using the Schema ID
-    entities_with_provenance = 0
-    for e in entities:
-        # Skip type definition entities
-        if e.get('entity') in [
-            "Ens7AArMgnLiF6xyuacwKR",
-            "HoYHubmhgWM9j3BJZXPytL",
-            "AiPDpTAJaap8B2EbDcpudK",
-        ]:
-            continue
-        if any(t.get("attribute") == prov_attr_id for t in e.get("triples", [])):
-            entities_with_provenance += 1
-            
-    print(f"\nEntities (excluding provenance): {other_entities:,}")
-    print(f"  With provenance: {entities_with_provenance:,} ({(entities_with_provenance/other_entities*100) if other_entities else 100:.1f}%)")
-    print(f"  Without provenance: {other_entities - entities_with_provenance:,} ({((other_entities - entities_with_provenance)/other_entities*100) if other_entities else 0:.1f}%)")
-
+    print(f"\nProvenance entities: {len(provenance_entities)}")
+    print("\nProvenance Sources:")
+    for source, count in sorted(provenance_sources.items()):
+        print(f"  {source}: {count}")
+    
+    # Calculate provenance coverage
+    non_prov_entities = len(entities) - len(provenance_entities)
+    coverage = len(entities_with_provenance) / non_prov_entities * 100 if non_prov_entities > 0 else 100
+    
+    print(f"\nProvenance Coverage:")
+    print(f"  Non-provenance entities: {non_prov_entities:,}")
+    print(f"  Entities with has_provenance: {len(entities_with_provenance):,}")
+    print(f"  Coverage: {coverage:.1f}%")
+    
+    if coverage >= 99.9:
+        print("  ✅ Excellent coverage!")
+    elif coverage >= 95:
+        print("  ⚠️  Good coverage, but some entities missing provenance")
+    else:
+        print("  ❌ Low coverage - many entities missing provenance")
+    
     print("\n" + "=" * 70)
     print("UNKNOWN IDS REPORT")
     print("=" * 70)
     
-    print(f"\nUnknown Type IDs ({len(unknown_type_ids)} unique, {sum(unknown_type_ids.values())} total):")
+    issues = 0
+    
     if unknown_type_ids:
-        for uid, count in sorted(unknown_type_ids.items(), key=lambda x: -x[1]):
+        print(f"\n⚠️  Unknown Type IDs ({len(unknown_type_ids)} unique):")
+        for uid, count in sorted(unknown_type_ids.items(), key=lambda x: -x[1])[:10]:
             print(f"  {uid}: {count:,}")
+        issues += sum(unknown_type_ids.values())
     else:
-        print("  None")
-
-    print(f"\nUnknown Attribute IDs ({len(unknown_attr_ids)} unique, {sum(unknown_attr_ids.values())} total):")
-    if unknown_attr_ids:
-        for uid, count in sorted(unknown_attr_ids.items(), key=lambda x: -x[1]):
+        print("\n✅ All type IDs are valid")
+    
+    if unknown_prop_ids:
+        print(f"\n⚠️  Unknown Property IDs ({len(unknown_prop_ids)} unique):")
+        for uid, count in sorted(unknown_prop_ids.items(), key=lambda x: -x[1])[:10]:
             print(f"  {uid}: {count:,}")
+        issues += sum(unknown_prop_ids.values())
     else:
-        print("  None")
-        
+        print("\n✅ All property IDs are valid")
+    
+    if unknown_rel_ids:
+        print(f"\n⚠️  Unknown Relation Type IDs ({len(unknown_rel_ids)} unique):")
+        for uid, count in sorted(unknown_rel_ids.items(), key=lambda x: -x[1])[:10]:
+            print(f"  {uid}: {count:,}")
+        issues += sum(unknown_rel_ids.values())
+    else:
+        print("\n✅ All relation type IDs are valid")
+    
     print("\n" + "=" * 70)
-    print("VALIDATION SUMMARY")
+    print("SUMMARY")
     print("=" * 70)
-    print(f"Total entities: {total_entities:,}")
-    print(f"Entity types: {len(schema.types)}")
-    print(f"Unique attributes: {len(schema.attributes)}")
-    print(f"Relation types: {len(schema.relations)}")
     
-    all_good = (
-        incomplete_rels == 0 and 
-        unknown_rel_types == 0 and 
-        len(unknown_type_ids) == 0 and 
-        len(unknown_attr_ids) == 0
-    )
+    print(f"""
+  Entities:        {len(entities):>10,}
+  Relations:       {len(relations):>10,}
+  Entity Types:    {len(type_counts):>10}
+  Relation Types:  {len(rel_type_counts):>10}
+  Provenance:      {coverage:>9.1f}%
+  Unknown IDs:     {issues:>10,}
+""")
     
-    if all_good:
-        print("  ✅ Schema Consistency: Complete")
+    if issues == 0 and coverage >= 99.9:
+        print("✅ VALIDATION PASSED")
+        return 0
     else:
-        print("  ❌ Schema Consistency: Issues Found")
-        
-    if entities_with_provenance == other_entities:
-        print("  ✅ Provenance Coverage: Complete")
-    else:
-        print(f"  ❌ Provenance Coverage: Incomplete ({other_entities - entities_with_provenance:,} missing)")
+        print("⚠️  VALIDATION COMPLETED WITH WARNINGS")
+        return 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

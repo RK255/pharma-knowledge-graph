@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
-from pharma_schema import PharmaSchema, generate_grc20_id
+from pharma_schema import PharmaSchema, generate_uuid
 
 # Initialize schema
 _schema = PharmaSchema()
@@ -17,9 +17,9 @@ GRC20_VALUE_TYPES = {
     "POINT": 6
 }
 
-def get_attribute_id(name: str) -> str:
-    """Get GRC-20 ID for an attribute from schema."""
-    return _schema.attr(name)
+def get_property_id(name: str) -> str:
+    """Get GRC-20 ID for a property from schema."""
+    return _schema.prop(name)
 
 def get_type_id(name: str) -> str:
     """Get GRC-20 ID for an entity type from schema."""
@@ -29,17 +29,23 @@ def get_relation_id(name: str) -> str:
     """Get GRC-20 ID for a relation from schema."""
     return _schema.relations.get(name)
 
-# Convenience dicts for backwards compatibility
-ATTRIBUTES = {
-    "name": _schema.attr("name"),
-    "type": _schema.attr("type"),
-    "description": _schema.attr("description"),
-    "section_type": _schema.attr("section_type"),
-    "content": _schema.attr("content"),
-    "fda_set_id": _schema.attr("fda_set_id"),
-    "effective_time": _schema.attr("effective_time"),
-    "set_id": _schema.attr("set_id"),
-}
+# Convenience dicts - only include properties that exist in schema
+# Build lazily to avoid errors on missing properties
+def _build_properties():
+    props = {}
+    for name in ["name", "description", "section_type", "content", 
+                 "fda_set_id", "effective_time", "set_id", "rxcui", "tty",
+                 "citation", "date_accessed", "source_url", "provenance_type"]:
+        try:
+            props[name] = _schema.prop(name)
+        except KeyError:
+            pass  # Property not in schema
+    return props
+
+PROPERTIES = _build_properties()
+
+# Alias for backwards compatibility
+ATTRIBUTES = PROPERTIES
 
 ENTITY_TYPES = {
     "PackageInsert": _schema.type_id("PackageInsert"),

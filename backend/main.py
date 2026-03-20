@@ -1087,13 +1087,8 @@ async def get_drug_pubchem(drug_id: str):
         return {"ingredients": [], "error": str(e)}
 
 
-@app.get("/{path:path}")
-async def catch_all(path: str):
-    frontend_path = f"/mnt/fast_raid/server_projects/Geo/graph_workshop/pharma-frontend/build/{path}"
-    if os.path.exists(frontend_path):
-        return FileResponse(frontend_path)
-    return FileResponse("/mnt/fast_raid/server_projects/Geo/graph_workshop/pharma-frontend/build/index.html")
 
+# Catch-all for frontend (must be last route)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
@@ -1239,3 +1234,12 @@ async def get_graph_recommendations(drug: str, indication: str = None, limit: in
         }
     except Exception as e:
         return {"drug": drug, "recommendations": [], "error": str(e)}
+
+# Catch-all for frontend (must be last route)
+@app.get("/{path:path}")
+async def catch_all(path: str):
+    frontend_path = f"/mnt/fast_raid/server_projects/Geo/graph_workshop/pharma-frontend/build/{path}"
+    if os.path.exists(frontend_path):
+        return FileResponse(frontend_path)
+    return FileResponse("/mnt/fast_raid/server_projects/Geo/graph_workshop/pharma-frontend/build/index.html")
+

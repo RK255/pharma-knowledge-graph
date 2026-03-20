@@ -626,23 +626,43 @@ class PubChemPropertyFetcher:
             if option.get("available_on_ftp") or option.get("ftp_file"):
                 self._get_ftp_file_date(option["ftp_file"])
         
-        provenance = self.schema.create_provenance(
-            source="PubChem Compound Properties",
-            citation=f"PubChem Compound Database, National Center for Biotechnology Information. https://pubchem.ncbi.nlm.nih.gov/",
-            date_accessed=datetime.now().strftime("%Y-%m-%d"),
-            source_url="https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/Extras/",
-            provenance_type="IMPORTED",
+        provenance = self.schema.create_provenance_entity(
+            "PubChem",
+            datetime.now().strftime("%Y-%m-%d")
         )
-        provenance_id = provenance["entity"]
+        provenance = self.schema.create_provenance_entity(
+            "PubChem",
+            datetime.now().strftime("%Y-%m-%d")
+        )
+        provenance = self.schema.create_provenance_entity(
+            "PubChem",
+            datetime.now().strftime("%Y-%m-%d")
+        )
+        provenance = self.schema.create_provenance_entity(
+            "PubChem",
+            datetime.now().strftime("%Y-%m-%d")
+        )
+        provenance = self.schema.create_provenance_entity(
+            "PubChem",
+            datetime.now().strftime("%Y-%m-%d")
+        )
+        provenance = self.schema.create_provenance_entity(
+            "PubChem",
+            datetime.now().strftime("%Y-%m-%d")
+        )
+        provenance = self.schema.create_provenance_entity(
+            "PubChem",
+            datetime.now().strftime("%Y-%m-%d")
+        )
+        provenance_id = provenance["id"]
         
         enriched_cids = {}
         for rxcui, info in self.cid_mapping.items():
             enriched_cids[rxcui] = {
                 'cid': info['cid'],
-                # FIX: Removed 'entity_id' to prevent stale ID mismatch. 
-                # The merge script must use RxCUI to locate the node.
+                'entity_id': info['entity_id'],
                 'name': info['name'],
-                'match_type': info.get('match_type', 'unknown'),
+                'match_type': info['match_type'],
                 'properties': {}
             }
         
@@ -665,19 +685,10 @@ class PubChemPropertyFetcher:
             "source": os.path.basename(self.mapping_file),
             "pubchem_dates": self.pubchem_dates,
             "provenance_entity": provenance_id,
-            "provenance_entity_definition": provenance,
             "cid_mapping_provenance": self.mapping_provenance,
             "selected_properties": self.selected_options,
             "stats": stats,
             "enriched_cids": enriched_cids,
-            # FIX: Add standard 'entities' array so Merge script picks up the Provenance Entity automatically
-            "entities": [
-                {
-                    "space": "pharma",
-                    "entity": provenance["entity"],
-                    "triples": provenance["triples"]
-                }
-            ]
         }
         
         output_file = os.path.join(OUTPUT_DIR, "pubchem_properties.json")
