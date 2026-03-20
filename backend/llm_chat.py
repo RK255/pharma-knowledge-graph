@@ -42,7 +42,7 @@ def parse_text_tool_call(content: str) -> list:
     
     return tool_calls
 
-VENICE_API_KEY = os.getenv("VENICE_API_KEY", "VENICE-INFERENCE-KEY-REDACTED")
+VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 VENICE_BASE_URL = "https://api.venice.ai/api/v1"
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b")
 

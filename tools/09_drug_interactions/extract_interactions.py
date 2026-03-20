@@ -17,7 +17,7 @@ XML_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/dailymed/
 OUTPUT_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/interactions")
 OUTPUT_FILE = OUTPUT_DIR / "interactions_structured.json"
 MANIFEST_FILE = OUTPUT_DIR / "extraction_manifest.json"
-VENICE_API_KEY = "VENICE-INFERENCE-KEY-REDACTED"
+VENICE_API_KEY = os.getenv("VENICE_API_KEY")
 VENICE_MODEL = "venice-uncensored"
 
 BATCH_SIZE = 10
@@ -128,10 +128,7 @@ def parse_xml_for_interactions(xml_path: Path) -> Optional[Dict]:
 async def extract_batch(client: httpx.AsyncClient, batch: List[Dict], batch_num: int) -> tuple:
     drugs_text = ""
     for drug in batch:
-        drugs_text += f"
-[{drug['drug_name']}]
-{drug['interaction_text']}
-"
+        drugs_text += f"\n[{drug['drug_name']}]\n{drug['interaction_text']}\n"
     
     prompt = BATCH_PROMPT.format(drugs_text=drugs_text)
     
@@ -179,11 +176,9 @@ async def extract_batch(client: httpx.AsyncClient, batch: List[Dict], batch_num:
             
             return (batch_num, batch, interactions)
         else:
-            print(f"
-  Batch {batch_num}: API error {response.status_code}")
+            print(f"\n  Batch {batch_num}: API error {response.status_code}")
     except Exception as e:
-        print(f"
-  Batch {batch_num}: Error - {e}")
+        print(f"\n  Batch {batch_num}: Error - {e}")
     
     return (batch_num, batch, [])
 
@@ -199,8 +194,7 @@ async def main(limit: int = 0):
     processed_set_ids = set(manifest['processed_set_ids'].keys())
     print(f"Resuming: {len(processed_set_ids)} already processed")
     
-    print("
-[Phase 1] Scanning XML files...")
+    print("\n[Phase 1] Scanning XML files...")
     xml_files = sorted(XML_DIR.glob("*.xml"))
     total_files = len(xml_files)
     if limit:
@@ -221,8 +215,7 @@ async def main(limit: int = 0):
         print("Nothing to process!")
         return
     
-    print(f"
-[Phase 2] Processing with {PARALLEL_BATCHES} parallel batches...")
+    print(f"\n[Phase 2] Processing with {PARALLEL_BATCHES} parallel batches...")
     
     all_interactions = []
     if OUTPUT_FILE.exists():
@@ -278,8 +271,7 @@ async def main(limit: int = 0):
     
     process_time = time.time() - start_process
     rate = processed / (process_time / 60) if process_time > 0 else 0
-    print(f"
-{'='*60}")
+    print(f"\n{'='*60}")
     print(f"DONE!")
     print(f"  Phase 1 (scan): {scan_time:.1f}s")
     print(f"  Phase 2 (extract): {process_time:.1f}s ({process_time/60:.1f} min)")

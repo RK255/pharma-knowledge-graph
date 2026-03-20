@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "Nani*48301"
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 
 class GraphClinicalWeights:
     """Query clinical weights from Neo4j graph."""

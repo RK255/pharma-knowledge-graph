@@ -36,7 +36,7 @@ app.add_middleware(
 
 # Neo4j Connection
 NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "Nani*48301")
+NEO4J_AUTH = ("neo4j", os.getenv("NEO4J_PASSWORD", ""))
 
 # Redis
 redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)

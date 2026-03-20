@@ -32,7 +32,7 @@ class GRC20Neo4jLoader:
         self,
         uri: str = "bolt://localhost:7687",
         user: str = "neo4j",
-        password: str = "BowserNodes",
+        password: str = os.getenv("NEO4J_PASSWORD", ""),
         database: str = "neo4j",
         batch_size: int = 1000
     ):
@@ -354,7 +354,7 @@ def main():
     parser.add_argument("data_file", help="Path to GRC-20 JSON file")
     parser.add_argument("--uri", default="bolt://localhost:7687", help="Neo4j URI")
     parser.add_argument("--user", default="neo4j", help="Neo4j user")
-    parser.add_argument("--password", default="BowserNodes", help="Neo4j password")
+    parser.add_argument("--password", default=os.getenv("NEO4J_PASSWORD", ""), help="Neo4j password")
     parser.add_argument("--database", default="neo4j", help="Neo4j database name")
     parser.add_argument("--batch-size", type=int, default=1000, help="Batch size")
     parser.add_argument("--clear", action="store_true", help="Clear database before loading")

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/api/pubchem", tags=["PubChem"])
 
 NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "Nani*48301")
+NEO4J_AUTH = ("neo4j", os.getenv("NEO4J_PASSWORD", ""))
 
 
 class PubChemProperties(BaseModel):

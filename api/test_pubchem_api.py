@@ -16,7 +16,7 @@ app.add_middleware(
 )
 
 NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "Nani*48301")
+NEO4J_AUTH = ("neo4j", os.getenv("NEO4J_PASSWORD", ""))
 
 
 @app.get("/")

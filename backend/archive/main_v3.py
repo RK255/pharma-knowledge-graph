@@ -17,7 +17,7 @@ from neo4j import GraphDatabase
 redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
 # Neo4j Connection
-neo4j_driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "Nani*48301"))
+neo4j_driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", os.getenv("NEO4J_PASSWORD", "")))
 
 
 

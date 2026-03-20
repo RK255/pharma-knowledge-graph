@@ -14,7 +14,7 @@ import os
 
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "Nani*48301"
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 WEIGHTS_FILE = "/mnt/fast_raid/server_projects/Geo/graph_workshop/pharma-backend/clinical_weights.json"
 
 DEFAULT_CURATOR = {
