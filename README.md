@@ -104,6 +104,3 @@ tools/
 ├── 08_clinical_weights/      # Expert-curated weights
 ├── 09_drug_interactions/     # Drug interactions
 └── 10_pharmacological_classes/  # Drug classes
-License
-
-MIT License
