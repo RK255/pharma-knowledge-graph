@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Schema cache (regenerated)
+00_schema/schema_cache.json
+00_schema/.schema_cache/
+
+# Generated data files (keep scripts, ignore output)
+*.jsonl
+*.json
+!00_schema/ontology/*.csv
+
+# Demo generated data (keep scripts)
+demo/*.jsonl
+demo/*.json
+demo_focused/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak

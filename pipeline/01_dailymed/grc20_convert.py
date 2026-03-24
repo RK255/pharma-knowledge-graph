@@ -388,10 +388,12 @@ def display_sample_entities(entities_file):
     print("\n SAMPLE ENTITIES:")
     print("=" * 80)
     
-    with open(output_file, 'r') as f:
-        data = json.load(f)
-        entities = data.get('entities', [])
-        relations = data.get('relations', [])
+    # Load entities from JSONL file
+    entities = []
+    with open(entities_file, 'r') as f:
+        for line in f:
+            if line.strip():
+                entities.append(json.loads(line))
     
     # Create reverse mapping for display
     reverse_props = {v: k for k, v in PROPERTIES.items()}
@@ -453,16 +455,6 @@ def display_sample_entities(entities_file):
             prop_name = reverse_props.get(value.get('property'), value.get('property', 'unknown'))
             val = value.get('value', '')
             print(f"   {i+1}. {prop_name}: {val}")
-    
-    # Display sample relations
-    if relations:
-        print("\n SAMPLE RELATIONS:")
-        print(f"   Total relations: {len(relations)}")
-        for i, rel in enumerate(relations[:3]):
-            rel_type = rel.get('type', 'unknown')
-            reverse_rel = {v: k for k, v in RELATIONS.items()}
-            rel_name = reverse_rel.get(rel_type, rel_type)
-            print(f"   {i+1}. {rel_name}: {rel.get('from', '?')} -> {rel.get('to', '?')}")
     
     print("\n PROPERTY MAPPING:")
     print("=" * 80)
@@ -642,6 +634,14 @@ def convert_package_insert_to_grc20(insert_data, analysis_results, provenance_id
     
     if 'effective_time' in insert_data:
         val = create_value("effective_time", insert_data['effective_time'])
+        if val:
+            values.append(val)
+    
+    # Add NDC codes (first NDC as primary value, all stored for later linking)
+    ndc_codes = insert_data.get('ndc_codes', [])
+    if ndc_codes:
+        # Add the first NDC as the primary ndc_code value
+        val = create_value("ndc_code", ndc_codes[0])
         if val:
             values.append(val)
     

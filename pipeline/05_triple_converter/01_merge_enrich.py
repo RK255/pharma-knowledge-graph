@@ -53,12 +53,15 @@ class GRC20Merger:
         self.load_relations_jsonl(DATA_DIR / "rxnorm_relations.jsonl", "RxNorm")
         
         # Load DailyMed
-        self.load_entities_jsonl(DATA_DIR / "dailymed_entities.jsonl", "DailyMed")
-        self.load_relations_jsonl(DATA_DIR / "dailymed_relations.jsonl", "DailyMed")
+        self.load_entities_jsonl(DATA_DIR / "dailymed_entities_entities.jsonl", "DailyMed")
+        self.load_relations_jsonl(DATA_DIR / "dailymed_entities_relations.jsonl", "DailyMed")
         
         # Load NDC Bridge
         self.load_entities_jsonl(DATA_DIR / "ndc_bridge_entities.jsonl", "NDC Bridge")
         self.load_relations_jsonl(DATA_DIR / "ndc_bridge_relations.jsonl", "NDC Bridge")
+        
+        # Load DailyMed → RxNorm Links (via NDC bridge)
+        # Linker runs after merge - relations appended by 02_link_pi_to_rxnorm.py
         
         # Load PubChem
         self.load_entities_jsonl(DATA_DIR / "pubchem_entities.jsonl", "PubChem")

@@ -19,6 +19,13 @@ import sys
 import time  # NEW: Import time module for progress tracking
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
+
+# Import text washer for better text extraction
+try:
+    from text_washer import TextWasher
+    _text_washer = TextWasher(preserve_formatting=True)
+except ImportError:
+    _text_washer = None
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from collections import defaultdict
@@ -521,8 +528,25 @@ def extract_fda_drug_info(root: ET.Element, file_path: str, prov_manager: Proven
         for ndc in root.findall('.//ns0:containerPackagedProduct/ns0:code', SPL_NS):
             code = ndc.get('code')
             if code:
-                normalized = code.replace('-', '').zfill(11)
-                formatted = f"{normalized[:5]}-{normalized[5:9]}-{normalized[9:11]}"
+                # Normalize NDC based on original format (5-3-2, 5-4-2, 4-4-2, or 4-5-2)
+                # The format determines WHERE to add padding zeros
+                if '-' in code:
+                    parts = code.split('-')
+                    if len(parts) == 3:
+                        p1, p2, p3 = parts
+                        # Pad each segment to target lengths: 5-4-2
+                        p1 = p1.zfill(5)  # First segment: pad to 5
+                        p2 = p2.zfill(4)  # Middle segment: pad to 4
+                        p3 = p3.zfill(2)  # Last segment: pad to 2
+                        formatted = f"{p1}-{p2}-{p3}"
+                    else:
+                        # Fallback: just clean and format
+                        clean = code.replace('-', '').zfill(11)
+                        formatted = f"{clean[:5]}-{clean[5:9]}-{clean[9:11]}"
+                else:
+                    # No hyphens - assume 11-digit format
+                    clean = code.zfill(11)
+                    formatted = f"{clean[:5]}-{clean[5:9]}-{clean[9:11]}"
                 ndc_codes.add(formatted)
         if ndc_codes: drug_info['ndc_codes'] = list(ndc_codes)
 
@@ -552,13 +576,23 @@ def extract_fda_drug_info(root: ET.Element, file_path: str, prov_manager: Proven
     return drug_info
 
 def extract_section_content(section: ET.Element) -> str:
-    """Extract content from a section, handling both direct text elements and nested sections within components."""
+    """Extract content from a section, handling both direct text elements and nested sections within components.
+    
+    Uses TextWasher for proper formatting of tables, lists, and paragraphs.
+    """
     content_parts = []
     
     # First try to get content from direct text element
     text_elem = section.find('ns0:text', SPL_NS)
     if text_elem is not None:
-        content_parts.append(extract_text(text_elem))
+        if _text_washer is not None:
+            # Use TextWasher for rich formatting (tables, lists, etc.)
+            washed = _text_washer.wash_element(text_elem)
+            if washed.strip():
+                content_parts.append(washed)
+        else:
+            # Fallback to simple extraction
+            content_parts.append(extract_text(text_elem))
     
     # Also check for nested sections within components
     for component in section.findall('ns0:component', SPL_NS):
@@ -567,13 +601,18 @@ def extract_section_content(section: ET.Element) -> str:
             # Extract content from the nested section
             nested_text = nested_section.find('ns0:text', SPL_NS)
             if nested_text is not None:
-                content_parts.append(extract_text(nested_text))
+                if _text_washer is not None:
+                    washed = _text_washer.wash_element(nested_text)
+                    if washed.strip():
+                        content_parts.append(washed)
+                else:
+                    content_parts.append(extract_text(nested_text))
             else:
                 # If no direct text element, extract all text from the nested section
                 content_parts.append(extract_text(nested_section))
     
-    # Join all content parts
-    return ' '.join(content_parts).strip()
+    # Join all content parts with double newlines for readability
+    return '\n\n'.join(part for part in content_parts if part.strip()).strip()
 
 # --- NEW: SPL Section Census Function ---
 def get_spl_section_census(root: ET.Element) -> Set[str]:

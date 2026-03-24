@@ -21,6 +21,7 @@ DATA_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/grc20_v2
 DAILYMED_XML_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/dailymed/xml_only")
 
 # Pipeline steps
+# NOTE: PI->RxNorm linker runs AFTER merge because it needs merged entity IDs
 STEPS = [
     {
         "num": 1,
@@ -73,13 +74,20 @@ STEPS = [
     },
     {
         "num": 8,
+        "name": "PI->RxNorm Linker",
+        "script": "05_triple_converter/02_link_pi_to_rxnorm.py",
+        "output": "dailymed_rxnorm_links_relations.jsonl",
+        "args": []
+    },
+    {
+        "num": 9,
         "name": "Ensure 100% Provenance",
         "script": "internal",
         "output": "grc20_with_relations.json",
         "args": []
     },
     {
-        "num": 9,
+        "num": 10,
         "name": "Validate All",
         "script": "00_schema/validate_all.py",
         "output": None,
@@ -89,6 +97,14 @@ STEPS = [
 
 def run_step(step, limit=None, force=False):
     """Run a single pipeline step."""
+    # Handle internal steps (functions defined in this file)
+    if step["script"] == "internal":
+        if step["name"] == "Ensure 100% Provenance":
+            return ensure_provenance_coverage(limit)
+        else:
+            print(f"  Unknown internal step: {step['name']}")
+            return False
+    
     script_path = BASE_DIR / step["script"]
     
     # Build command
@@ -220,7 +236,7 @@ def main():
         print(f"\n[{step['num']}/{len(STEPS)}] {step['name']}")
         print("-" * 80)
         
-        if step['num'] == 8:  # Provenance step
+        if step['num'] == 9:  # Provenance step
             success = ensure_provenance_coverage(args.limit)
         else:
             success = run_step(step, args.limit, args.force)
