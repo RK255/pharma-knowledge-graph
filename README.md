@@ -1,106 +1,92 @@
-# Pharmaceutical Knowledge Graph
+# Pharmaceutical Knowledge Graph Pipeline
 
-A production-grade pharmaceutical knowledge graph built on GRC-20 format with full provenance tracking.
-
-## Demo Dataset
-
-Included demo with 5 drugs and 2-level relationship traversal. See `pipeline/demo/` for:
-- 451 entities
-- 3,224 relations
-- Ontology documentation
-
-## Architecture
-├── pipeline/ # Data ingestion stages (00-06)
-├── backend/ # FastAPI + Neo4j + Redis
-├── tools/ # Utility scripts (clinical weights, interactions)
-└── pipeline/demo/ # Demo dataset for testing
-## Pipeline Stages
-
-| Stage | Directory | Description |
-|-------|-----------|-------------|
-| 00 | 00_schema | Schema definition and validation |
-| 01 | 01_dailymed | Parse FDA SPL XML files |
-| 02 | 02_rxnorm | Load RxNorm terminology |
-| 03 | 03_ndc_bridge | Bridge NDC to RxNorm |
-| 04 | 04_pubchem | Enrich with PubChem data |
-| 05 | 05_triple_converter | Merge and convert to GRC-20 |
-| 06 | 06_loaders | Load data into Neo4j/Redis |
-
-## Schema Overview
-
-### Entity Types (31)
-
-**Core Drug Types:**
-- `Ingredient` - Active pharmaceutical ingredient
-- `PreciseIngredient` - Specific salt/form of an ingredient
-- `MultipleIngredient` - Combination ingredients
-
-**Clinical Drug Types:**
-- `ClinicalDrug` - Fully specified generic drug product
-- `ClinicalDrugComponent` - Ingredient + strength (generic)
-- `ClinicalDrugForm` - Drug + dose form (generic)
-- `ClinicalDrugGroup` - Drug group (generic)
-
-**Branded Drug Types:**
-- `BrandedDrug` - Fully specified branded drug product
-- `BrandedDrugComponent` - Ingredient + strength (branded)
-- `BrandedDrugForm` - Drug + dose form (branded)
-- `BrandName` - Trade name
-
-**Other Types:**
-- `DoseForm`, `DoseFormGroup`, `NDC`, `PubChemCompound`, `Provenance`, and more
-
-### Key Relations
-
-| Relation | Description |
-|----------|-------------|
-| `has_ingredient` / `ingredient_of` | Drug-ingredient relationships |
-| `has_dose_form` / `dose_form_of` | Drug dose forms |
-| `tradename_of` / `has_tradename` | Brand relationships |
-| `is_a` / `inverse_isa` | Hierarchical classification |
-| `maps_to_rxcui` | NDC to RxNorm mapping |
+A production pipeline that transforms pharmaceutical data from multiple sources into a unified GRC-20 compliant knowledge graph.
 
 ## Quick Start
 
 ```bash
-# Start Neo4j
-docker start neo4j-server
-
-# Start Redis  
-docker start redis-server
-
-# Run pipeline
 cd pipeline
-python run_pipeline.py --all
+python run_pipeline.py
+Data Model
 
-# Start backend
-cd backend
-python main.py
+The pipeline transforms pharmaceutical data from multiple sources into a unified knowledge graph following GRC-20 format.
+Entity Hierarchy
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           PHARMACEUTICAL KNOWLEDGE GRAPH                         │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│  INGREDIENT (IN)                                                                  │
+│  │   Examples: semaglutide, metformin, lisinopril                               │
+│  │                                                                                │
+│  │  has_ingredient                                                               │
+│  └──────────────→ SCDC/SCDF/SCDG (Clinical Drug Components/Forms/Groups)        │
+│                     │   SCDC: semaglutide 7 MG (strength component)              │
+│                     │   SCDF: semaglutide Oral Tablet (dose form)                │
+│                     │   SCDG: semaglutide Oral Product (dose form group)         │
+│                     │                                                            │
+│                     │  consists_of                                               │
+│                     └──────────────→ SCD (Semantic Clinical Drug)               │
+│                                        │   semaglutide 7 MG Oral Tablet         │
+│                                        │                                         │
+│                                        │  tradename_of                          │
+│                                        └──────────────→ SBD (Branded Drug)      │
+│                                                           │                      │
+│                              ┌────────────────────────────┘                      │
+│                              │                                                   │
+│                              │  maps_to_rxcui                                    │
+│                              │                                                   │
+│            ┌─────────────────┴─────────────────┐                                │
+│            │                                   │                                 │
+│            ▼                                   ▼                                 │
+│       NDC (Product)                    PackageInsert                            │
+│       00169-4307-01                    RYBELSUS-semaglutide                     │
+│       00169-4307-13                        │                                    │
+│       00169-4307-30                        │  has_section                        │
+│                                            └──────────→ Sections                 │
+│                                                        │                         │
+│                                                        ▼                         │
+│                                            ┌─────────────────────┐              │
+│                                            │ BOXED_WARNING       │              │
+│                                            │ INDICATIONS         │              │
+│                                            │ DOSAGE_ADMIN        │              │
+│                                            │ CONTRAINDICATIONS   │              │
+│                                            │ WARNINGS            │              │
+│                                            │ ADVERSE_REACTIONS   │              │
+│                                            │ ... (26 sections)   │              │
+│                                            └─────────────────────┘              │
+│                                                                                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+Relation Directions
+From	Relation	To	Description
+IN	has_ingredient	SCDC/SCDF/SCDG	Ingredient to drug components
+SCDC/SCDF/SCDG	consists_of	SCD	Components to clinical drugs
+SCD	tradename_of	SBD	Clinical to branded drugs
+NDC	maps_to_rxcui	SBD	NDC codes to branded drugs
+PackageInsert	maps_to_rxcui	SBD	Labels to branded drugs
+PackageInsert	has_section	Section	Labels to sections
+Entity Types (RxNorm TTY Codes)
+Code	Type	Description	Count
+IN	Ingredient	Active pharmaceutical ingredients	~6K
+SCDC	ClinicalDrugComponent	Strength + ingredient combo	~10K
+SCDF	ClinicalDrugForm	Dose form (tablet, injection)	~6K
+SCDG	ClinicalDrugGroup	Dose form groups	~6K
+SCD	ClinicalDrug	Complete clinical drug product	~12K
+SBD	BrandedDrug	Branded drug products	~8K
+BN	BrandName	Brand names (Rybelsus, Ozempic)	~4K
+NDC	NDC	National Drug Codes	~250K
+PackageInsert	PackageInsert	FDA drug labels	~51K
+Section	Section	Label sections	~1M
 Data Sources
-Source	Description
-RxNorm	Drug terminology
-DailyMed	FDA SPL labels
-PubChem	Chemical structures
-NDC Directory	Product codes
-Project Structure
-pipeline/
-├── 00_schema/
-│   ├── pharma_schema.py      # Schema loader
-│   ├── ontology/             # CSV schema definitions
-│   │   ├── types.csv
-│   │   ├── properties.csv
-│   │   ├── relation_types.csv
-│   │   └── provenance_sources.csv
-│   └── schema.json           # Generated schema
-├── demo/                     # Demo dataset
-└── [01-06]_*/               # Pipeline stages
-
-backend/
-├── main.py                   # FastAPI server
-├── llm_chat.py               # LLM integration
-└── graph_weights_admin.py    # Clinical weights
-
-tools/
-├── 08_clinical_weights/      # Expert-curated weights
-├── 09_drug_interactions/     # Drug interactions
-└── 10_pharmacological_classes/  # Drug classes
+Source	Records	Description
+RxNorm	~100K entities	Drug terminology and relationships
+DailyMed	~51K labels	FDA package inserts with sections
+FDA NDC	~250K codes	Product packaging identifiers
+PubChem	~3K compounds	Chemical structures and properties
+Pipeline Steps
+00_schema/          → Schema definition and validation
+01_dailymed/        → Parse SPL XML → PackageInsert + Sections
+02_rxnorm/          → RxNorm RDF → IN/SCDC/SCDF/SCDG/SCD/SBD entities + relations
+03_ndc_bridge/      → FDA NDC Directory → NDC entities + maps_to_rxcui
+04_pubchem/         → PubChem API → Chemical enrichment
+05_triple_converter/→ Merge all sources → GRC-20 format
+06_loaders/         → Neo4j bulk import
