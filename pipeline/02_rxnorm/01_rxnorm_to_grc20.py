@@ -17,6 +17,7 @@ import os
 import sys
 import zipfile
 import re
+from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Set, Optional, Tuple
@@ -27,6 +28,19 @@ sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..', '00_schema'
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..')))
 from pharma_schema import PharmaSchema, generate_uuid
 from shared_state import save_source_selection
+
+# =============================================================================
+# FORCE SCHEMA REGENERATION
+# =============================================================================
+# Force schema regeneration by deleting the cache file if it exists
+# This ensures the RxNorm converter uses the latest schema with correct IDs
+CACHE_FILE_PATH = Path(__file__).parent.parent / "00_schema" / "schema_cache.json"
+if CACHE_FILE_PATH.exists():
+    try:
+        CACHE_FILE_PATH.unlink()
+        print(f"[INFO] Deleted existing schema cache: {CACHE_FILE_PATH}")
+    except Exception as e:
+        print(f"[WARNING] Could not delete schema cache: {e}")
 
 # =============================================================================
 # CONFIGURATION

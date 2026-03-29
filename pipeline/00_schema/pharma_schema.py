@@ -19,6 +19,10 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+# GRC-20 Type UUIDs (from schema_cache.json)
+PROVENANCE_TYPE = "4f209cfaa9065ab09544fb83a601f297"
+HAS_PROVENANCE_RELATION = "40336b51fbf358408ee0cbcc808d43b6"
+
 
 # =============================================================================
 # GRC-20 STANDARD IDS (from spec - these are FIXED, non-hyphenated)
@@ -219,8 +223,10 @@ PROPERTIES = {
     
     # Chemical properties
     "pubchem_cid": {"value_type": "NUMBER", "description": "PubChem Compound ID"},
+    "mesh_classes": {"value_type": "TEXT", "description": "MeSH classification codes"},
     "smiles": {"value_type": "TEXT", "description": "SMILES molecular structure"},
     "inchikey": {"value_type": "TEXT", "description": "InChIKey identifier"},
+    "iupac_name": {"value_type": "TEXT", "description": "IUPAC systematic name"},
     "iupac_name": {"value_type": "TEXT", "description": "IUPAC systematic name"},
     "molecular_formula": {"value_type": "TEXT", "description": "Molecular formula"},
     "molecular_weight": {"value_type": "NUMBER", "description": "Molecular weight in Daltons"},
@@ -464,11 +470,26 @@ class PharmaSchema:
         try:
             with open(self.CACHE_FILE, 'r') as f:
                 data = json.load(f)
-            self.types = data.get("types", {})
-            self.properties = data.get("properties", {})
-            self.relations = data.get("relations", {})
             self.metadata = data.get("metadata", {})
+            
+            # Load types from full dictionary structure
+            self.types = {}
+            for type_dict in data.get("types", []):
+                self.types[type_dict["name"]] = type_dict["id"]
+            
+            # Load properties from full dictionary structure
+            self.properties = {}
+            for prop_dict in data.get("properties", []):
+                self.properties[prop_dict["name"]] = prop_dict["id"]
+            
+            # Load relations from full dictionary structure
+            self.relations = {}
+            for rel_dict in data.get("relations", []):
+                self.relations[rel_dict["name"]] = rel_dict["id"]
+            
+            # Load provenance entities
             self.provenance_entities = data.get("provenance_entities", {})
+            
             print(f"[INFO] Loaded schema from cache: {len(self.types)} types, {len(self.properties)} properties, {len(self.relations)} relations")
             return True
         except Exception as e:
@@ -511,12 +532,58 @@ class PharmaSchema:
     
     def _save_cache(self):
         """Save schema to cache."""
+        # Build types list
+        types_list = []
+        for name, type_id in self.types.items():
+            info = ENTITY_TYPES.get(name, {})
+            types_list.append({
+                "id": type_id,
+                "name": name,
+                "description": info.get("description", ""),
+                "tty": info.get("tty"),
+            })
+        
+        # Build properties list
+        properties_list = []
+        for name, prop_id in self.properties.items():
+            info = PROPERTIES.get(name, {})
+            properties_list.append({
+                "id": prop_id,
+                "name": name,
+                "value_type": info.get("value_type", "TEXT"),
+                "description": info.get("description", ""),
+            })
+        
+        # Build relations list
+        relations_list = []
+        for name, rel_id in self.relations.items():
+            info = RELATION_TYPES.get(name, {})
+            relations_list.append({
+                "id": rel_id,
+                "name": name,
+                "description": info.get("description", ""),
+                "inverse": info.get("inverse"),
+            })
+        
+        # Build provenance list
+        provenance_list = []
+        for source_name, source_id in self.provenance_entities.items():
+            info = PROVENANCE_SOURCES[source_name]
+            provenance_list.append({
+                "id": source_id,
+                "name": source_name,
+                "citation_template": info["citation_template"],
+                "source_url": info["source_url"],
+                "provenance_type": info["provenance_type"],
+            })
+        
         data = {
             "metadata": self.metadata,
-            "types": self.types,
-            "properties": self.properties,
-            "relations": self.relations,
+            "types": types_list,
+            "properties": properties_list,
+            "relations": relations_list,
             "provenance_entities": self.provenance_entities,
+            "provenance_sources": provenance_list,
         }
         with open(self.CACHE_FILE, 'w') as f:
             json.dump(data, f, indent=2)
@@ -650,63 +717,90 @@ class PharmaSchema:
     # PROVENANCE METHODS
     # =========================================================================
     
-    def create_provenance_entity(self, source_name: str, date_accessed: str = None) -> dict:
+    def create_provenance_entity(
+        self,
+        source_name: str,
+        date_accessed: str = None,
+    ) -> Dict[str, Any]:
         """Create a provenance entity for a data source.
         
         Args:
-            source_name: One of the keys in PROVENANCE_SOURCES
-            date_accessed: Date string (default: today)
+            source_name: Name of the source (RxNorm, PubChem, DailyMed)
+            date_accessed: Date data was accessed (defaults to today)
         
         Returns:
-            Entity dict for Geo SDK import
+            Entity dict with provenance information
         """
-        if source_name not in PROVENANCE_SOURCES:
+        source_def = PROVENANCE_SOURCES.get(source_name)
+        if not source_def:
             raise ValueError(f"Unknown provenance source: {source_name}")
         
         if date_accessed is None:
-            date_accessed = datetime.now().strftime("%Y-%m-%d")
+            date_accessed = datetime.utcnow().strftime("%Y-%m-%d")
         
-        source = PROVENANCE_SOURCES[source_name]
-        citation = source["citation_template"].format(date=date_accessed)
+        citation = source_def["citation_template"].format(date=date_accessed)
         
-        entity = {
-            "id": self.provenance_entities[source_name],
-            "name": source["name"],
+        return {
+            "id": generate_uuid(seed=f"provenance:{source_name}:{date_accessed}"),
             "types": [self.type_id("Provenance")],
             "values": [
-                {"property": self.prop("name"), "value": source["name"]},  # GRC-20 name
-                {"property": self.prop("citation"), "value": citation},
-                {"property": self.prop("date_accessed"), "value": date_accessed},
-                {"property": self.prop("source_url"), "value": source["source_url"]},
-                {"property": self.prop("provenance_type"), "value": source["provenance_type"]},
-            ]
+                {
+                    "property": self.prop("name"),
+                    "value": source_def["name"],
+                },
+                {
+                    "property": self.prop("citation"),
+                    "value": citation,
+                },
+                {
+                    "property": self.prop("source_url"),
+                    "value": source_def["source_url"],
+                },
+                {
+                    "property": self.prop("date_accessed"),
+                    "value": date_accessed,
+                },
+                {
+                    "property": self.prop("provenance_type"),
+                    "value": source_def["provenance_type"],
+                },
+            ],
         }
-        
-        return entity
-    
-    def add_provenance_relation(self, entity_id: str, source_name: str) -> dict:
-        """Create a has_provenance relation from entity to source.
+
+    def add_provenance_relation(
+        self,
+        from_entity_id: str,
+        source_name: str,
+        relation_id: Optional[str] = None,
+    ) -> dict:
+        """Add a provenance relation from an entity to its provenance source.
         
         Args:
-            entity_id: The entity to link
-            source_name: One of the keys in PROVENANCE_SOURCES
+            from_entity_id: The entity ID that has provenance
+            source_name: Name of the provenance source (RxNorm, PubChem, DailyMed)
+            relation_id: Optional relation ID (will be generated if not provided)
         
         Returns:
-            Relation dict for Geo SDK import
+            dict with 'id', 'type', 'from', 'to', 'values' for Geo SDK import
         """
-        if source_name not in PROVENANCE_SOURCES:
-            raise ValueError(f"Unknown provenance source: {source_name}")
+        # Get or create the provenance entity
+        if source_name not in self.provenance_entities:
+            provenance = self.create_provenance_entity(source_name)
+            self.provenance_entities[source_name] = provenance["id"]
         
-        return self.create_relation(
-            from_entity_id=entity_id,
-            relation_type="has_provenance",
-            to_entity_id=self.provenance_entities[source_name]
-        )
-    
-    # =========================================================================
-    # EXPORT METHODS
-    # =========================================================================
-    
+        to_entity_id = self.provenance_entities[source_name]
+        
+        if relation_id is None:
+            relation_id = generate_uuid()
+        
+        return {
+            "id": relation_id,
+            "type": HAS_PROVENANCE_RELATION,
+            "from": from_entity_id,
+            "to": to_entity_id,
+            "values": []
+        }
+
     def export_ontology_csv(self, output_dir: Path):
         """Export ontology as CSV files for human review (Geo devs).
         

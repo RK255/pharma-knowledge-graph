@@ -38,7 +38,7 @@ from pharma_schema import PharmaSchema
 schema = PharmaSchema()
 
 # Get relation type ID for maps_to_rxcui
-MAPS_TO_RXCUI_REL = schema.rel("maps_to_rxcui")
+MAPS_TO_RXCUI_REL = schema.relations.get("maps_to_rxcui")
 
 
 def generate_uuid(seed_string: str) -> str:
@@ -119,7 +119,7 @@ def main():
             
             # Check if it has an RxCUI (indicates RxNorm entity)
             for val in e.get('values', []):
-                if val.get('property') == schema.prop('rxcui'):
+                if val.get('property') == schema.properties.get('rxcui'):
                     rxcui = val.get('value')
                     if rxcui:
                         rxcui_to_entity[rxcui] = e['id']
@@ -129,7 +129,7 @@ def main():
     
     # Step 4: Load PackageInserts and build Set ID -> entity_id mapping
     print("\n[4/6] Loading PackageInserts from merged entities...")
-    set_id_prop = schema.prop('fda_set_id')
+    set_id_prop = schema.properties.get('fda_set_id')
     package_insert_type = schema.type_id('PackageInsert')
     
     set_id_to_pi_id = {}

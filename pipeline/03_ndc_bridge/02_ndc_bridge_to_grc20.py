@@ -37,7 +37,7 @@ NDC_TO_RXCUI_FILE = f"{DATA_DIR}/ndc_to_rxcui.json"
 RXNORM_ENTITIES_FILE = f"{OUTPUT_DIR}/rxnorm_entities.jsonl"
 
 
-def load_rxnorm_entity_mapping(jsonl_file: str) -> Dict[str, str]:
+def load_rxnorm_entity_mapping(jsonl_file: str, schema: PharmaSchema) -> Dict[str, str]:
     """
     Load RxCUI → entity_id mapping from rxnorm_entities.jsonl.
     
@@ -48,7 +48,7 @@ def load_rxnorm_entity_mapping(jsonl_file: str) -> Dict[str, str]:
     rxcui_to_entity = {}
     
     # Property ID for rxcui (from schema)
-    rxcui_property_id = "c6f36f8a8e22546ea7618ac008d2f91e"
+    rxcui_property_id = schema.properties.get("rxcui")
     
     with open(jsonl_file, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
@@ -113,7 +113,7 @@ def main():
         print("  Run 02_rxnorm/01_rxnorm_to_grc20.py first")
         return
     
-    rxcui_to_entity = load_rxnorm_entity_mapping(RXNORM_ENTITIES_FILE)
+    rxcui_to_entity = load_rxnorm_entity_mapping(RXNORM_ENTITIES_FILE, schema)
     print(f"  Loaded {len(rxcui_to_entity):,} RxCUI → entity mappings")
     
     # [3] Build NDC entities and relations

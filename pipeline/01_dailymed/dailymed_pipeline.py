@@ -89,16 +89,15 @@ def run_grc20_convert(output_dir: Path, progress=None) -> bool:
         progress.report(0.5, "Converting to GRC-20...")
     
     try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
         from grc20_convert import convert_dataset_to_grc20
         input_file = output_dir / "dailymed_documents.json"
         output_file = output_dir / "dailymed_entities.json"
         
-        if not input_file.exists():
-            print(f"ERROR: Input file not found: {input_file}")
-            return False
-        
-        entities, scores, overall = convert_dataset_to_grc20(str(input_file), str(output_file), progress=progress)
-        print(f"  Created {len(entities)} GRC-20 entities → {output_file}")
+        stats = convert_dataset_to_grc20(str(input_file), str(output_file), progress=progress)
+        # Validation scores not available in current implementation
+        # The function returns (entity_count, relation_count)
         return True
     except ImportError:
         print("ERROR: grc20_convert.py not found")

@@ -9,7 +9,7 @@ IMPORTANT: One PackageInsert can have MULTIPLE NDCs (different strengths/sizes),
 and each NDC can map to a DIFFERENT RxCUI. We create a relation for EACH match.
 
 Input:
-  - data/grc20_v2/grc20_merged_entities.jsonl (PackageInsert entities with fda_set_id)
+  - data/grc20_v2/dailymed_entities.jsonl (PackageInsert entities with fda_set_id)
   - data/grc20_v2/dailymed_documents.json (fda_set_id -> ALL NDCs mapping)
   - data/raw_data/ndc_to_rxcui.json (NDC -> RxCUI mapping)
   - data/grc20_v2/rxnorm_entities.jsonl (ClinicalDrug entities)
@@ -36,6 +36,9 @@ sys.path.insert(0, f"{BASE_DIR}/scripts/production/pipeline/00_schema")
 from pharma_schema import PharmaSchema
 
 schema = PharmaSchema()
+
+# Get the ID for the 'rxcui' property
+rxcui_prop_id = schema.prop("rxcui")
 
 # Get relation type ID for maps_to_rxcui (PackageInsert -> ClinicalDrug via NDC)
 MAPS_TO_RXCUI_REL = schema.rel("maps_to_rxcui")
@@ -102,7 +105,7 @@ def main():
     # Step 3: Load RxNorm entities and build RxCUI -> entity_id mapping
     print("\n[3/6] Loading RxNorm entities...")
     rxcui_to_entity = {}
-    rxnorm_path = f"{DATA_DIR}/rxnorm_entities.jsonl"
+    rxnorm_path = f"{DATA_DIR}/grc20_merged_entities.jsonl"
     with open(rxnorm_path, 'r') as f:
         for i, line in enumerate(f):
             if i % 100000 == 0 and i > 0:
@@ -111,7 +114,8 @@ def main():
             # Find RxCUI in values
             for val in e.get('values', []):
                 prop = val.get('property')
-                if prop == schema.prop('rxcui'):
+                prop_name = prop.get('name') if isinstance(prop, dict) else prop
+                if prop == rxcui_prop_id:
                     rxcui = val.get('value')
                     if rxcui:
                         rxcui_to_entity[rxcui] = e['id']
@@ -119,26 +123,34 @@ def main():
     print(f"  Found {len(rxcui_to_entity):,} RxCUI -> entity mappings")
     
     # Step 4: Load PackageInserts and build fda_set_id -> entity_id mapping
-    print("\n[4/6] Loading PackageInserts from merged entities...")
+    print("\n[4/6] Loading PackageInserts from DailyMed entities...")
     set_id_prop = schema.prop('fda_set_id')
     package_insert_type = schema.type_id('PackageInsert')
+    set_id_prop_id = set_id_prop if set_id_prop else None
     
     set_id_to_pi_id = {}
-    merged_path = f"{DATA_DIR}/grc20_merged_entities.jsonl"
+    dailymed_path = f"{DATA_DIR}/dailymed_entities.jsonl"
     
-    with open(merged_path, 'r') as f:
+    with open(dailymed_path, 'r') as f:
         for i, line in enumerate(f):
             if i % 200000 == 0 and i > 0:
                 print(f"  Processed {i:,} entities...")
             e = json.loads(line)
             
             # Check if it's a PackageInsert
-            if package_insert_type not in e.get('types', []):
+            package_insert_type_id = schema.type_id("PackageInsert")
+            entity_type_ids = [t.get('id') if isinstance(t, dict) else t for t in e.get('types', [])]
+            
+            if package_insert_type_id not in entity_type_ids:
                 continue
             
             # Find fda_set_id value
             for val in e.get('values', []):
-                if val.get('property') == set_id_prop:
+                prop = val.get('property')
+                # Check for property by ID (dict), name (string), or ID (string)
+                prop_id = prop.get('id') if isinstance(prop, dict) else prop
+                prop_name = prop.get('name') if isinstance(prop, dict) else None
+                if prop_id == set_id_prop_id or prop_name == 'fda_set_id' or prop == 'fda_set_id':
                     set_id = val.get('value')
                     if set_id:
                         set_id_to_pi_id[set_id] = e['id']
@@ -239,7 +251,7 @@ def main():
     summary = {
         'exported_at': datetime.now().isoformat(),
         'schema_version': '4.0.0',
-        'source': 'grc20_merged_entities.jsonl + dailymed_documents.json + ndc_to_rxcui.json + rxnorm_entities.jsonl',
+        'source': 'dailymed_entities.jsonl + dailymed_documents.json + ndc_to_rxcui.json + rxnorm_entities.jsonl',
         'stats': stats
     }
     

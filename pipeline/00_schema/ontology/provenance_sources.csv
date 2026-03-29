@@ -1,4 +1,0 @@
-id,name,citation_template,source_url,provenance_type
-f2b2563a4fcf58e5a1c3b45264f324ea,RxNorm,RxNorm [Internet]. Bethesda (MD): National Library of Medicine (US); [cited {date}]. Available from: https://rxnorm.nlm.nih.gov/,https://rxnorm.nlm.nih.gov/,IMPORTED
-fbcb490cf4415a46a13c169f3a7eba77,PubChem,PubChem [Internet]. Bethesda (MD): National Library of Medicine (US); [cited {date}]. Available from: https://pubchem.ncbi.nlm.nih.gov/,https://pubchem.ncbi.nlm.nih.gov/,IMPORTED
-be4dc5ff13bf54de8c047d9e5cd43cf8,DailyMed,DailyMed [Internet]. Bethesda (MD): National Library of Medicine (US); [cited {date}]. Available from: https://dailymed.nlm.nih.gov/,https://dailymed.nlm.nih.gov/,IMPORTED

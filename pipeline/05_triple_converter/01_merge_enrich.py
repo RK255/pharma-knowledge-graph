@@ -21,6 +21,13 @@ DEFAULT_OUTPUT = DATA_DIR / "grc20_merged"
 sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
 from pharma_schema import PharmaSchema
 
+
+def get_property_id(prop):
+    """Extract property ID from either dict or string."""
+    if isinstance(prop, dict):
+        return prop.get("id")
+    return prop
+
 class GRC20Merger:
     """Merges GRC-20 JSONL files and enriches with properties."""
     
@@ -41,7 +48,15 @@ class GRC20Merger:
             "total_entities": 0,
             "total_relations": 0,
         }
-        self.rel_id_to_name = {id_: name for name, id_ in self.schema.relations.items()}
+        # Handle schema.relations which might be dicts or strings
+        self.rel_id_to_name = {}
+        for name, value in self.schema.relations.items():
+            if isinstance(value, dict):
+                # If value is a dict, look for 'id' field
+                self.rel_id_to_name[value.get('id', '')] = name
+            else:
+                # If value is a string ID
+                self.rel_id_to_name[value] = name
         
     def merge_all(self):
         print("=" * 70)
@@ -53,8 +68,8 @@ class GRC20Merger:
         self.load_relations_jsonl(DATA_DIR / "rxnorm_relations.jsonl", "RxNorm")
         
         # Load DailyMed
-        self.load_entities_jsonl(DATA_DIR / "dailymed_entities_entities.jsonl", "DailyMed")
-        self.load_relations_jsonl(DATA_DIR / "dailymed_entities_relations.jsonl", "DailyMed")
+        self.load_entities_jsonl(DATA_DIR / "dailymed_entities.jsonl", "DailyMed")
+        self.load_relations_jsonl(DATA_DIR / "dailymed_relations.jsonl", "DailyMed")
         
         # Load NDC Bridge
         self.load_entities_jsonl(DATA_DIR / "ndc_bridge_entities.jsonl", "NDC Bridge")
@@ -76,7 +91,12 @@ class GRC20Merger:
         self.export_jsonl(DEFAULT_OUTPUT)
         
     def load_entities_jsonl(self, filepath: Path, source_name: str):
-        """Load entities from JSONL file."""
+        """Load entities from JSONL or JSON file."""
+        # Prefer JSON file if it exists
+        json_path = filepath.with_suffix('.json')
+        if json_path.exists():
+            filepath = json_path
+        
         if not filepath.exists():
             print(f"\n[{source_name}] ⚠️ Entities file not found: {filepath.name}")
             return
@@ -85,21 +105,33 @@ class GRC20Merger:
         count = 0
         new_count = 0
         
-        with open(filepath, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                entity = json.loads(line)
-                entity_id = entity.get("id")
-                if entity_id and entity_id not in self.entities:
-                    self.entities[entity_id] = entity
-                    new_count += 1
-                count += 1
+        # Check if it's a JSON file (not JSONL)
+        if filepath.suffix == '.json':
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+                entities = data if isinstance(data, list) else data.get('entities', [])
+                for entity in entities:
+                    entity_id = entity.get("id")
+                    if entity_id and entity_id not in self.entities:
+                        self.entities[entity_id] = entity
+                        new_count += 1
+                    count += 1
+        else:
+            # JSONL format
+            with open(filepath, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entity = json.loads(line)
+                    entity_id = entity.get("id")
+                    if entity_id and entity_id not in self.entities:
+                        self.entities[entity_id] = entity
+                        new_count += 1
+                    count += 1
         
         self.stats[f"{source_name.lower().replace(' ', '_')}_entities"] = new_count
         print(f"  ✅ Loaded {count:,} entities ({new_count:,} new)")
-        
     def load_relations_jsonl(self, filepath: Path, source_name: str):
         """Load relations from JSONL file."""
         if not filepath.exists():
@@ -140,7 +172,7 @@ class GRC20Merger:
         print(f"  Found {len(enriched_cids):,} enrichment records")
         
         # Build RxCUI to entity lookup
-        rxcui_prop_id = self.schema.prop("rxcui")
+        rxcui_prop_id = self.schema.properties.get("rxcui")
         rxcui_to_entity = {}
         
         for entity_id, entity in self.entities.items():
@@ -154,16 +186,16 @@ class GRC20Merger:
         
         # Supported properties (PubChem enrichment)
         supported_props = {
-            "mesh_classes": self.schema.prop("mesh_classes"),
-            "smiles": self.schema.prop("smiles"),
-            "inchikey": self.schema.prop("inchikey"),
-            "iupac_name": self.schema.prop("iupac_name"),
-            "pubchem_cid": self.schema.prop("pubchem_cid"),
-            "molecular_formula": self.schema.prop("molecular_formula"),
-            "molecular_weight": self.schema.prop("molecular_weight"),
-            "pubchem_date": self.schema.prop("pubchem_date"),
-            "pmid": self.schema.prop("pmid"),
-            "sid": self.schema.prop("sid"),
+            "mesh_classes": self.schema.properties.get("mesh_classes"),
+            "smiles": self.schema.properties.get("smiles"),
+            "inchikey": self.schema.properties.get("inchikey"),
+            "iupac_name": self.schema.properties.get("iupac_name"),
+            "pubchem_cid": self.schema.properties.get("pubchem_cid"),
+            "molecular_formula": self.schema.properties.get("molecular_formula"),
+            "molecular_weight": self.schema.properties.get("molecular_weight"),
+            "pubchem_date": self.schema.properties.get("pubchem_date"),
+            "pmid": self.schema.properties.get("pmid"),
+            "sid": self.schema.properties.get("sid"),
         }
         
         for rxcui, cid_data in enriched_cids.items():
@@ -173,7 +205,7 @@ class GRC20Merger:
             
             entity = self.entities[entity_id]
             properties = cid_data.get("properties", {})
-            existing_props = {v.get("property") for v in entity.get("values", [])}
+            existing_props = {v.get("property").get("id") if isinstance(v.get("property"), dict) else v.get("property") for v in entity.get("values", [])}
             
             for prop_key, value in properties.items():
                 if not value:
@@ -181,7 +213,7 @@ class GRC20Merger:
                 prop_id = supported_props.get(prop_key)
                 if not prop_id:
                     continue
-                if prop_id in existing_props:
+                if prop_id in [get_property_id(v.get("property")) for v in entity.get("values", [])]:
                     continue
                 
                 entity.setdefault("values", []).append({
@@ -223,7 +255,12 @@ class GRC20Merger:
         rel_type_counts = defaultdict(int)
         for rel in self.relations.values():
             type_id = rel.get("type", "unknown")
-            type_name = self.rel_id_to_name.get(type_id, type_id[:8])
+            # Handle type_id being either a dict or string
+            if isinstance(type_id, dict):
+                type_id_str = type_id.get('id', 'unknown')
+            else:
+                type_id_str = type_id
+            type_name = self.rel_id_to_name.get(type_id_str, type_id_str[:8] if type_id_str else "Unknown")
             rel_type_counts[type_name] += 1
         
         print(f"\n  Relation types:")

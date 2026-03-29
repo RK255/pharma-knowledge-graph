@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 GRC-20 Validation Script (v2)
 ==============================
@@ -17,6 +16,7 @@ from pharma_schema import PharmaSchema
 DATA_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/grc20_v2")
 ENTITIES_FILE = DATA_DIR / "grc20_merged_entities.jsonl"
 RELATIONS_FILE = DATA_DIR / "grc20_merged_relations.jsonl"
+SCHEMA_CACHE = Path(__file__).parent / "schema_cache.json"
 
 
 def load_jsonl(filepath):
@@ -29,17 +29,56 @@ def load_jsonl(filepath):
     return records
 
 
+def load_schema():
+    """Load schema directly from PharmaSchema class."""
+    from pharma_schema import PharmaSchema
+    
+    # Instantiate the schema class
+    # It will automatically load from cache if available
+    schema = PharmaSchema()
+    
+    return schema
+
+def get_id(obj):
+    """Helper function to get ID from schema object."""
+    if isinstance(obj, dict):
+        return obj.get("id")
+    return obj
+
+
 def main():
     print("=" * 70)
     print("GRC-20 VALIDATOR")
     print("=" * 70)
     
-    schema = PharmaSchema()
-    print(f"Schema Loaded: {schema.metadata.get('name', 'Unknown')} v{schema.metadata.get('version', 'Unknown')}")
+    # Load schema directly from cache file
+    schema = load_schema()
+    metadata = schema.metadata if hasattr(schema, 'metadata') else {}
+    print(f"Schema Loaded: {metadata.get('name', 'Unknown')} v{metadata.get('version', 'Unknown')}")
     
     # Get IDs from schema
-    has_provenance_id = schema.relations.get("has_provenance")
-    provenance_type_id = schema.type_id("Provenance")
+    # The schema.relations dict is {name: id}
+    has_provenance_id = None
+    provenance_type_id = None
+    
+    # Try to find has_provenance ID
+    # Iterate over items (name, id)
+    for rel_name, rel_id in schema.relations.items():
+        if rel_name == "has_provenance":
+            has_provenance_id = rel_id
+            break
+    
+    # Try to find Provenance type ID
+    for type_name, type_id in schema.types.items():
+        if type_name == "Provenance":
+            provenance_type_id = type_id
+            break
+
+    if not has_provenance_id or not provenance_type_id:
+        print("⚠️  Could not find has_provenance relation or Provenance type in schema")
+        print(f"  Schema relations sample: {list(schema.relations.items())[:3]}")
+        print(f"  Schema types sample: {list(schema.types.items())[:3]}")
+        return 1
     
     print(f"\nSchema IDs:")
     print(f"  has_provenance relation: {has_provenance_id}")
@@ -74,8 +113,11 @@ def main():
     unknown_rel_ids = defaultdict(int)
     
     # Valid IDs from schema
+    # schema.types is {name: id}, so values are the IDs
     valid_type_ids = set(schema.types.values())
+    # schema.properties is {name: id}, so values are the IDs
     valid_prop_ids = set(schema.properties.values())
+    # schema.relations is {name: id}, so values are the IDs
     valid_rel_ids = set(schema.relations.values())
     
     print("\n" + "=" * 70)
@@ -86,10 +128,16 @@ def main():
         entity_id = entity.get("id")
         entity_ids.add(entity_id)
         
-        # Check types
+        # Check types - handle both 'type' (singular) and 'types' (plural)
         types = entity.get("types", [])
-        for type_id in types:
-            type_counts[type_id] += 1
+        if not types and entity.get("type"):
+            types = [entity.get("type")]
+        
+        for type_obj in types:
+            type_id = get_id(type_obj) if isinstance(type_obj, dict) else type_obj
+            type_counts[type_id] = type_counts.get(type_id, 0) + 1
+            if isinstance(type_id, dict):
+                type_id = type_id.get("id", type_id)
             if type_id not in valid_type_ids:
                 unknown_type_ids[type_id] += 1
             
@@ -98,13 +146,23 @@ def main():
                 provenance_entities.append(entity)
                 provenance_ids.add(entity_id)
         
-        # Check properties
-        for value in entity.get("values", []):
-            prop_id = value.get("property")
-            if prop_id and prop_id not in valid_prop_ids:
-                unknown_prop_ids[prop_id] += 1
+        # Check properties - handle both 'values' (list) and 'properties' (dict)
+        if "values" in entity:
+            for value in entity.get("values", []):
+                prop_id = value.get("property")
+                # Handle prop_id being either a string or a dict
+                if isinstance(prop_id, dict):
+                    prop_id = prop_id.get("id", prop_id)
+                if prop_id and prop_id not in valid_prop_ids:
+                    unknown_prop_ids[prop_id] += 1
+        elif "properties" in entity:
+            # Properties is a dict with property names as keys
+            for prop_name in entity.get("properties", {}).keys():
+                # Property names in 'properties' dict are names, not IDs - skip validation
+                pass
     
     # Resolve type names
+    # Invert the types dict {name: id} to {id: name}
     type_id_to_name = {v: k for k, v in schema.types.items()}
     
     print(f"\nEntity Types ({len(type_counts)} unique):")
@@ -135,7 +193,8 @@ def main():
         
         # Check relation type
         if rel_id:
-            rel_type_counts[rel_id] += 1
+            rel_id = get_id(rel_id) if isinstance(rel_id, dict) else rel_id
+            rel_type_counts[rel_id] = rel_type_counts.get(rel_id, 0) + 1
             if rel_id not in valid_rel_ids:
                 unknown_rel_ids[rel_id] += 1
         
@@ -151,6 +210,7 @@ def main():
             rel_missing_to += 1
     
     # Resolve relation type names
+    # Invert the relations dict {name: id} to {id: name}
     rel_id_to_name = {v: k for k, v in schema.relations.items()}
     
     print(f"\nRelation Types ({len(rel_type_counts)} unique):")
@@ -173,7 +233,7 @@ def main():
     
     # Get provenance entity names
     provenance_sources = defaultdict(int)
-    name_prop_id = schema.prop("name")
+    name_prop_id = get_id(schema.prop("name"))
     
     for prov in provenance_entities:
         name = "Unknown"
