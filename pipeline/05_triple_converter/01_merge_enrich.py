@@ -64,7 +64,37 @@ class GRC20Merger:
         print("=" * 70)
         
         # Load RxNorm
-        self.load_entities_jsonl(DATA_DIR / "rxnorm_entities.jsonl", "RxNorm")
+        # Use enriched file if available (has PubChem properties)
+        rxnorm_file = DATA_DIR / "rxnorm_entities_enriched.jsonl"
+        self.pubchem_enriched = rxnorm_file.exists()
+        if not self.pubchem_enriched:
+            rxnorm_file = DATA_DIR / "rxnorm_entities.jsonl"
+        self.load_entities_jsonl(rxnorm_file, "RxNorm")
+        
+        # Count PubChem properties if enriched
+        if self.pubchem_enriched:
+            smiles_id = self.schema.properties.get("smiles")
+            inchikey_id = self.schema.properties.get("inchikey")
+            enriched_count = 0
+            properties_count = 0
+            for entity in self.entities.values():
+                entity_enriched = False
+                for v in entity.get("values", []):
+                    prop = v.get("property", "")
+                    if isinstance(prop, dict):
+                        prop = prop.get("id", "")
+                    if prop in (smiles_id, inchikey_id):
+                        entity_enriched = True
+                    if prop in (smiles_id, inchikey_id, 
+                                self.schema.properties.get("iupac_name"),
+                                self.schema.properties.get("molecular_weight"),
+                                self.schema.properties.get("pmid")):
+                        properties_count += 1
+                if entity_enriched:
+                    enriched_count += 1
+            self.stats["enriched"] = enriched_count
+            self.stats["properties_added"] = properties_count
+            print(f"  ✓ PubChem properties already embedded: {enriched_count:,} entities enriched")
         self.load_relations_jsonl(DATA_DIR / "rxnorm_relations.jsonl", "RxNorm")
         
         # Load DailyMed
@@ -78,11 +108,11 @@ class GRC20Merger:
         # Load DailyMed → RxNorm Links (via NDC bridge)
         # Linker runs after merge - relations appended by 02_link_pi_to_rxnorm.py
         
-        # Load PubChem
-        self.load_entities_jsonl(DATA_DIR / "pubchem_entities.jsonl", "PubChem")
-        self.load_relations_jsonl(DATA_DIR / "pubchem_relations.jsonl", "PubChem")
-        self.load_entities_jsonl(DATA_DIR / "pubchem_properties_entities.jsonl", "PubChem Properties")
-        self.load_relations_jsonl(DATA_DIR / "pubchem_properties_relations.jsonl", "PubChem Properties")
+        # Load PubChem (optional files - may not exist depending on pipeline run)
+        self.load_entities_jsonl(DATA_DIR / "pubchem_entities.jsonl", "PubChem", optional=True)
+        self.load_relations_jsonl(DATA_DIR / "pubchem_relations.jsonl", "PubChem", optional=True)
+        self.load_entities_jsonl(DATA_DIR / "pubchem_properties_entities.jsonl", "PubChem Properties", optional=True)
+        self.load_relations_jsonl(DATA_DIR / "pubchem_properties_relations.jsonl", "PubChem Properties", optional=True)
         
         # Enrich with PubChem data
         self.enrich_pubchem()
@@ -90,7 +120,7 @@ class GRC20Merger:
         # Export
         self.export_jsonl(DEFAULT_OUTPUT)
         
-    def load_entities_jsonl(self, filepath: Path, source_name: str):
+    def load_entities_jsonl(self, filepath: Path, source_name: str, optional: bool = False):
         """Load entities from JSONL or JSON file."""
         # Prefer JSON file if it exists
         json_path = filepath.with_suffix('.json')
@@ -98,7 +128,8 @@ class GRC20Merger:
             filepath = json_path
         
         if not filepath.exists():
-            print(f"\n[{source_name}] ⚠️ Entities file not found: {filepath.name}")
+            if not optional:
+                print(f"\n[{source_name}] ⚠️ Entities file not found: {filepath.name}")
             return
         
         print(f"\n[{source_name}] Loading entities: {filepath.name}...")
@@ -132,10 +163,11 @@ class GRC20Merger:
         
         self.stats[f"{source_name.lower().replace(' ', '_')}_entities"] = new_count
         print(f"  ✅ Loaded {count:,} entities ({new_count:,} new)")
-    def load_relations_jsonl(self, filepath: Path, source_name: str):
+    def load_relations_jsonl(self, filepath: Path, source_name: str, optional: bool = False):
         """Load relations from JSONL file."""
         if not filepath.exists():
-            print(f"\n[{source_name}] ⚠️ Relations file not found: {filepath.name}")
+            if not optional:
+                print(f"\n[{source_name}] ⚠️ Relations file not found: {filepath.name}")
             return
         
         print(f"[{source_name}] Loading relations: {filepath.name}...")
@@ -159,10 +191,15 @@ class GRC20Merger:
         
     def enrich_pubchem(self):
         """Enrich entities with PubChem properties from pubchem_properties.json."""
+        # Skip if we already used the enriched file
+        if getattr(self, 'pubchem_enriched', False):
+            print("\n[PubChem] Properties already loaded from rxnorm_entities_enriched.jsonl")
+            return
+        
         print("\n[PubChem] Enriching with properties...")
         pubchem_file = DATA_DIR / "pubchem_properties.json"
         if not pubchem_file.exists():
-            print(f"  ⚠️ File not found: {pubchem_file}")
+            print(f"  ⚠️ No PubChem enrichment available")
             return
         
         with open(pubchem_file, 'r') as f:

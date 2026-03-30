@@ -122,14 +122,20 @@ def main():
     entities = []
     relations = []
     
-    # Create provenance entity using "RxNorm" source (RXNSAT is part of RxNorm)
-    provenance = schema.create_provenance_entity(
-        source_name="RxNorm",
-        date_accessed=source_date
-    )
-    provenance_id = provenance["id"]
-    entities.append(provenance)
-    print(f"  Created provenance: {provenance_id}")
+    # Use the existing RxNorm provenance from the schema (created by RxNorm converter)
+    # RXNSAT is part of RxNorm, so we use the same provenance
+    provenance_id = schema.provenance_entities.get("RxNorm")
+    if not provenance_id:
+        print("  ⚠️  RxNorm provenance not found in schema. Creating new one...")
+        provenance = schema.create_provenance_entity(
+            source_name="RxNorm",
+            date_accessed=source_date
+        )
+        provenance_id = provenance["id"]
+        entities.append(provenance)
+        print(f"  Created provenance: {provenance_id}")
+    else:
+        print(f"  Using existing RxNorm provenance: {provenance_id}")
     
     # Get property IDs
     ndc_code_prop = schema.prop("ndc_code")
@@ -197,7 +203,7 @@ def main():
     
     # Add provenance relations for NDC entities
     print(f"  Adding provenance relations...")
-    for entity in entities[1:]:  # Skip provenance entity
+    for entity in entities:
         prov_rel = schema.add_provenance_relation(entity["id"], "RxNorm")
         relations.append(prov_rel)
     

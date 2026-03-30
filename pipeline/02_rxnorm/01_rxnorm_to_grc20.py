@@ -602,7 +602,7 @@ class RxNormGRC20Converter:
         print(f"     relations.jsonl: {relations_size:.1f} MB ({len(self.relations):,} relations)")
         print(f"     summary.json: {summary_file}")
     
-    def run(self, auto: bool = False) -> str:
+    def run(self, auto: bool = False, source_file: str = None) -> str:
         """Run the full conversion pipeline."""
         print("=" * 70)
         print("RXNORM TO GRC-20 CONVERTER v4.0")
@@ -611,7 +611,40 @@ class RxNormGRC20Converter:
         
         # Find/select files
         print("\n[1/6] Finding RxNorm source...")
-        if auto:
+        
+        # If a specific source file is provided, use it
+        if source_file:
+            # Resolve path: full path or relative to RAW_DATA_DIR
+            if os.path.exists(source_file):
+                source_path = source_file
+            else:
+                potential_path = os.path.join(RAW_DATA_DIR, source_file)
+                if os.path.exists(potential_path):
+                    source_path = potential_path
+                else:
+                    print(f"  [ERROR] Provided RxNorm file not found: {source_file}")
+                    sys.exit(1)
+
+            print(f"  [INFO] Using specified RxNorm file: {os.path.basename(source_path)}")
+
+            # Extract the file
+            extracted_dir = self.extract_zip(os.path.basename(source_path))
+            if not extracted_dir:
+                print(f"  [ERROR] Failed to extract {source_path}")
+                sys.exit(1)
+
+            self.selected_extract_dir = extracted_dir
+            self.source_date = self.extract_date_from_filename(os.path.basename(source_path))
+            
+            # Find RRF files
+            rrf_dir = os.path.join(extracted_dir, "rrf")
+            conso_file = os.path.join(rrf_dir, "RXNCONSO.RRF")
+            rel_file = os.path.join(rrf_dir, "RXNREL.RRF")
+            
+            if not os.path.exists(conso_file) or not os.path.exists(rel_file):
+                print(f"  [ERROR] RRF files not found in {rrf_dir}")
+                sys.exit(1)
+        elif auto:
             conso_file, rel_file = self.find_rrf_files_auto()
         else:
             conso_file, rel_file = self.select_source()
@@ -658,7 +691,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert RxNorm to GRC-20 format v4.0")
     parser.add_argument("--auto", action="store_true", help="Auto-select first available source (no prompts)")
     parser.add_argument("--limit", type=int, help="Limit number of concepts (for testing)")
+    parser.add_argument("--rxnorm-file", type=str, help="Specific RxNorm zip file to use")
     args = parser.parse_args()
     
     converter = RxNormGRC20Converter(limit=args.limit)
-    output = converter.run(auto=args.auto)
+    output = converter.run(auto=args.auto, source_file=args.rxnorm_file)

@@ -740,8 +740,17 @@ class PharmaSchema:
         
         citation = source_def["citation_template"].format(date=date_accessed)
         
+        # Use the predefined ID from provenance_entities if available
+        # This ensures consistent IDs across all pipeline runs
+        if source_name in self.provenance_entities:
+            provenance_id = self.provenance_entities[source_name]
+        else:
+            # Fallback: generate deterministic ID based on source name only
+            provenance_id = generate_uuid(seed=f"pharma_v4_prov_{source_name}")
+            self.provenance_entities[source_name] = provenance_id
+        
         return {
-            "id": generate_uuid(seed=f"provenance:{source_name}:{date_accessed}"),
+            "id": provenance_id,
             "types": [self.type_id("Provenance")],
             "values": [
                 {

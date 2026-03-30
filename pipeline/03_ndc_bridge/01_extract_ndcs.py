@@ -139,142 +139,164 @@ def extract_date_from_filename(filename: str) -> str:
     return None
 
 
-def main(source_date=None, auto=False):
-    print("=" * 70)
-    print("NDC EXTRACTOR v4 - NDC + RxCUI Mapping")
-    print("=" * 70)
-    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # Find RXNSAT file
-    rxnsat_file, source_name = find_rxnsat_file(source_date=source_date, auto=auto)
-    actual_source_date = extract_date_from_filename(source_name)
-    
-    # Save source selection for bridge step
-    save_source_selection("RxNorm_RXNSAT", rxnsat_file, {
-        "source_name": source_name,
-        "source_date": actual_source_date
-    })
-    
-    # Stats
-    stats = defaultdict(int)
-    ndc_data = defaultdict(lambda: {"sources": set(), "rxcuis": set()})
-    rxcui_to_ndcs = defaultdict(set)
-    
-    print(f"\n[1/2] Processing: {rxnsat_file}")
-    
-    with open(rxnsat_file, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            if line_num % 500000 == 0:
-                print(f"  Processed {line_num:,} lines...")
-            
-            parts = line.strip().split('|')
-            if len(parts) < 11:
-                continue
-            
-            # Check for NDC attribute
-            attr_type = parts[8] if len(parts) > 8 else ""
-            if attr_type != "NDC":
-                continue
-            
-            rxcui = parts[0].strip() if len(parts) > 0 else ""
-            source = parts[9] if len(parts) > 9 else ""
-            ndc_raw = parts[10] if len(parts) > 10 else ""
-            
-            if not ndc_raw or not rxcui:
-                continue
-            
-            stats[f"source_{source}"] += 1
-            
-            # Normalize NDC
-            ndc_normalized = normalize_ndc_to_542(ndc_raw)
-            
-            if ndc_normalized:
-                stats["normalized"] += 1
-                ndc_data[ndc_normalized]["sources"].add(source)
-                ndc_data[ndc_normalized]["rxcuis"].add(rxcui)
-                rxcui_to_ndcs[rxcui].add(ndc_normalized)
-            else:
-                stats["failed_normalize"] += 1
-    
-    # Stats output
-    print(f"\n{'='*70}")
-    print("STATISTICS")
-    print(f"{'='*70}")
-    print(f"RXNORM source NDCs: {stats['source_RXNORM']:,}")
-    print(f"MTHSPL source NDCs: {stats['source_MTHSPL']:,}")
-    print(f"Normalized: {stats['normalized']:,}")
-    print(f"Failed to normalize: {stats.get('failed_normalize', 0):,}")
-    print(f"Unique NDCs: {len(ndc_data):,}")
-    print(f"Unique RxCUIs: {len(rxcui_to_ndcs):,}")
-    
-    # Count by source combination
-    rxnorm_only = sum(1 for d in ndc_data.values() if d["sources"] == {"RXNORM"})
-    mthspl_only = sum(1 for d in ndc_data.values() if d["sources"] == {"MTHSPL"})
-    both = sum(1 for d in ndc_data.values() if d["sources"] == {"RXNORM", "MTHSPL"})
-    
-    print(f"\nNDC Coverage:")
-    print(f"  RXNORM only: {rxnorm_only:,}")
-    print(f"  MTHSPL only: {mthspl_only:,}")
-    print(f"  Both sources: {both:,}")
-    
-    # Output: ndc_to_rxcui.json
-    output_json = f"{OUTPUT_DIR}/ndc_to_rxcui.json"
-    print(f"\n[2/2] Writing: {output_json}")
-    
-    # Build mappings
-    ndc_to_rxcui = {}
-    for ndc, data in ndc_data.items():
-        rxcuis = sorted(data["rxcuis"])
-        # Store as single string if only one RxCUI, else list
-        ndc_to_rxcui[ndc] = rxcuis[0] if len(rxcuis) == 1 else rxcuis
-    
-    rxcui_to_ndcs_list = {rxcui: sorted(ndcs) for rxcui, ndcs in rxcui_to_ndcs.items()}
-    
-    output_data = {
-        "ndc_to_rxcui": ndc_to_rxcui,
-        "rxcui_to_ndcs": rxcui_to_ndcs_list,
-        "stats": {
-            "total_ndcs": len(ndc_data),
-            "total_rxcuis": len(rxcui_to_ndcs),
-            "by_source": {
-                "rxnorm_only": rxnorm_only,
-                "mthspl_only": mthspl_only,
-                "both": both
-            }
-        },
-        "source": source_name,
-        "source_date": actual_source_date,
-        "created": datetime.now().isoformat()
-    }
-    
-    with open(output_json, 'w') as f:
-        json.dump(output_data, f, indent=2)
-    
-    size_mb = os.path.getsize(output_json) / 1024 / 1024
-    print(f"  ✅ Wrote {size_mb:.1f} MB ({len(ndc_data):,} NDCs)")
-    
-    # Show sample
-    print(f"\nSample NDC → RxCUI:")
-    for i, (ndc, data) in enumerate(sorted(ndc_data.items())[:5]):
-        sources = ",".join(sorted(data["sources"]))
-        rxcuis = ",".join(sorted(data["rxcuis"])[:3])
-        if len(data["rxcuis"]) > 3:
-            rxcuis += "..."
-        print(f"  {ndc} [{sources}] → {rxcuis}")
-    
-    print(f"\n{'='*70}")
-    print("EXTRACTION COMPLETE")
-    print(f"{'='*70}")
-    return output_json
-
+def main(source_date=None, auto=False, rxnorm_dir=None):
+	print("=" * 70)
+	print("NDC EXTRACTOR v4 - NDC + RxCUI Mapping")
+	print("=" * 70)
+	print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+	
+	# Find RXNSAT file
+	# If a specific source directory is provided, use it directly
+	if rxnorm_dir:
+		# Construct the path to RXNSAT.RRF
+		rxnsat_path = os.path.join(rxnorm_dir, "rrf", "RXNSAT.RRF")
+		if os.path.exists(rxnsat_path):
+			rxnsat_file = rxnsat_path
+			# Extract source name from the directory path
+			source_name = os.path.basename(rxnorm_dir.rstrip('/'))
+			print(f"  [INFO] Using specified RxNorm directory: {source_name}")
+		else:
+			# Try without 'rrf' subdirectory
+			rxnsat_path = os.path.join(rxnorm_dir, "RXNSAT.RRF")
+			if os.path.exists(rxnsat_path):
+				rxnsat_file = rxnsat_path
+				source_name = os.path.basename(rxnorm_dir.rstrip('/'))
+				print(f"  [INFO] Using specified RxNorm directory: {source_name}")
+			else:
+				print(f"  [ERROR] RXNSAT.RRF not found in specified directory: {rxnorm_dir}")
+				sys.exit(1)
+	else:
+		# Fall back to existing file selection logic
+		rxnsat_file, source_name = find_rxnsat_file(source_date=source_date, auto=auto)
+	
+	actual_source_date = extract_date_from_filename(source_name)
+	
+	# Save source selection for bridge step
+	save_source_selection("RxNorm_RXNSAT", rxnsat_file, {
+		"source_name": source_name,
+		"source_date": actual_source_date
+	})
+	
+	# Stats
+	stats = defaultdict(int)
+	ndc_data = defaultdict(lambda: {"sources": set(), "rxcuis": set()})
+	rxcui_to_ndcs = defaultdict(set)
+	
+	print(f"\n[1/2] Processing: {rxnsat_file}")
+	
+	with open(rxnsat_file, 'r') as f:
+		for line_num, line in enumerate(f, 1):
+			if line_num % 500000 == 0:
+				print(f"  Processed {line_num:,} lines...")
+			
+			parts = line.strip().split('|')
+			if len(parts) < 11:
+				continue
+			
+			# Check for NDC attribute
+			attr_type = parts[8] if len(parts) > 8 else ""
+			if attr_type != "NDC":
+				continue
+			
+			rxcui = parts[0].strip() if len(parts) > 0 else ""
+			source = parts[9] if len(parts) > 9 else ""
+			ndc_raw = parts[10] if len(parts) > 10 else ""
+			
+			if not ndc_raw or not rxcui:
+				continue
+			
+			stats[f"source_{source}"] += 1
+			
+			# Normalize NDC
+			ndc_normalized = normalize_ndc_to_542(ndc_raw)
+			
+			if ndc_normalized:
+				stats["normalized"] += 1
+				ndc_data[ndc_normalized]["sources"].add(source)
+				ndc_data[ndc_normalized]["rxcuis"].add(rxcui)
+				rxcui_to_ndcs[rxcui].add(ndc_normalized)
+			else:
+				stats["failed_normalize"] += 1
+	
+	# Stats output
+	print(f"\n{'='*70}")
+	print("STATISTICS")
+	print(f"{'='*70}")
+	print(f"RXNORM source NDCs: {stats['source_RXNORM']:,}")
+	print(f"MTHSPL source NDCs: {stats['source_MTHSPL']:,}")
+	print(f"Normalized: {stats['normalized']:,}")
+	print(f"Failed to normalize: {stats.get('failed_normalize', 0):,}")
+	print(f"Unique NDCs: {len(ndc_data):,}")
+	print(f"Unique RxCUIs: {len(rxcui_to_ndcs):,}")
+	
+	# Count by source combination
+	rxnorm_only = sum(1 for d in ndc_data.values() if d["sources"] == {"RXNORM"})
+	mthspl_only = sum(1 for d in ndc_data.values() if d["sources"] == {"MTHSPL"})
+	both = sum(1 for d in ndc_data.values() if d["sources"] == {"RXNORM", "MTHSPL"})
+	
+	print(f"\nNDC Coverage:")
+	print(f"  RXNORM only: {rxnorm_only:,}")
+	print(f"  MTHSPL only: {mthspl_only:,}")
+	print(f"  Both sources: {both:,}")
+	
+	# Output: ndc_to_rxcui.json
+	output_json = f"{OUTPUT_DIR}/ndc_to_rxcui.json"
+	print(f"\n[2/2] Writing: {output_json}")
+	
+	# Build mappings
+	ndc_to_rxcui = {}
+	for ndc, data in ndc_data.items():
+		rxcuis = sorted(data["rxcuis"])
+		# Store as single string if only one RxCUI, else list
+		ndc_to_rxcui[ndc] = rxcuis[0] if len(rxcuis) == 1 else rxcuis
+	
+	rxcui_to_ndcs_list = {rxcui: sorted(ndcs) for rxcui, ndcs in rxcui_to_ndcs.items()}
+	
+	output_data = {
+		"ndc_to_rxcui": ndc_to_rxcui,
+		"rxcui_to_ndcs": rxcui_to_ndcs_list,
+		"stats": {
+			"total_ndcs": len(ndc_data),
+			"total_rxcuis": len(rxcui_to_ndcs),
+			"by_source": {
+				"rxnorm_only": rxnorm_only,
+				"mthspl_only": mthspl_only,
+				"both": both
+			}
+		},
+		"source": source_name,
+		"source_date": actual_source_date,
+		"created": datetime.now().isoformat()
+	}
+	
+	with open(output_json, 'w') as f:
+		json.dump(output_data, f, indent=2)
+	
+	size_mb = os.path.getsize(output_json) / 1024 / 1024
+	print(f"  ✅ Wrote {size_mb:.1f} MB ({len(ndc_data):,} NDCs)")
+	
+	# Show sample
+	print(f"\nSample NDC → RxCUI:")
+	for i, (ndc, data) in enumerate(sorted(ndc_data.items())[:5]):
+		sources = ",".join(sorted(data["sources"]))
+		rxcuis = ",".join(sorted(data["rxcuis"])[:3])
+		if len(data["rxcuis"]) > 3:
+			rxcuis += "..."
+		print(f"  {ndc} [{sources}] → {rxcuis}")
+	
+	print(f"\n{'='*70}")
+	print("EXTRACTION COMPLETE")
+	print(f"{'='*70}")
+	return output_json
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract NDC codes from RxNorm RXNSAT.RRF")
     parser.add_argument("--auto", action="store_true", help="Use most recent source (no prompts)")
     parser.add_argument("--source-date", help="Auto-select source with this date (YYYY-MM-DD)")
+    parser.add_argument("--rxnorm-dir", help="Direct path to RxNorm extracted directory")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(source_date=args.source_date, auto=args.auto)
+    main(source_date=args.source_date, auto=args.auto, rxnorm_dir=args.rxnorm_dir)

@@ -239,7 +239,7 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
                 relation_id=generate_uuid(seed=f"prov:mfr:{manufacturer_id}"),
                 relation_type="has_provenance",
                 from_id=manufacturer_id,
-                to_id="be4dc5ff13bf54de8c047d9e5cd43cf8"  # DailyMed Provenance Entity ID
+                to_id=provenance_id  # DailyMed Provenance Entity ID
             )
             if prov_rel:
                 relations.append(prov_rel)
@@ -275,7 +275,7 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
             relation_id=generate_uuid(seed=f"prov:ndc:{ndc_code}"),
             relation_type="has_provenance",
             from_id=ndc_id,
-            to_id="be4dc5ff13bf54de8c047d9e5cd43cf8"  # DailyMed Provenance Entity ID
+            to_id=provenance_id  # DailyMed Provenance Entity ID
         )
         if prov_rel:
             relations.append(prov_rel)
@@ -383,20 +383,16 @@ def convert_dataset_to_grc20(input_path: str, output_path: str, progress=None) -
     
     print(f"Loaded {len(documents)} documents")
     
-    # Create provenance entity
-    provenance_id = generate_uuid(seed="provenance:dailymed:import")
-    provenance_entity = create_entity(
-        entity_id=provenance_id,
-        entity_type="Provenance",
-        name="DailyMed Import",
-        values=[
-            create_value("name", "DailyMed"),
-            create_value("citation", "DailyMed [Internet]. Bethesda (MD): National Library of Medicine (US)"),
-            create_value("source_url", "https://dailymed.nlm.nih.gov/"),
-            create_value("provenance_type", "IMPORTED"),
-            create_value("date_accessed", datetime.now().strftime("%Y-%m-%d"))
-        ]
-    )
+    # Create provenance entity using the schema's deterministic ID
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
+    from pharma_schema import PharmaSchema
+    schema = PharmaSchema()
+    
+    # Use the schema's provenance system for consistent IDs
+    provenance_entity = schema.create_provenance_entity("DailyMed")
+    provenance_id = provenance_entity["id"]
+    print(f"  DailyMed provenance ID: {provenance_id}")
     
     all_entities = [provenance_entity] if provenance_entity else []
     all_relations = []

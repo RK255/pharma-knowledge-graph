@@ -4,6 +4,7 @@
 import os
 import requests
 import zipfile
+import shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -11,10 +12,14 @@ from datetime import datetime
 BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
 DAILYMED_DIR = f"{BASE_DIR}/data/dailymed"
 RAW_DIR = f"{DAILYMED_DIR}/raw"
+# We use 'extracted' as the temporary staging area for zip contents
+# We use 'xml_only' as the final destination for XML files
 EXTRACTED_DIR = f"{DAILYMED_DIR}/extracted"
+TARGET_XML_DIR = f"{DAILYMED_DIR}/xml_only"
+ARCHIVE_DIR = f"{DAILYMED_DIR}/archive"
 
 # Create directories
-for dir_path in [DAILYMED_DIR, RAW_DIR, EXTRACTED_DIR]:
+for dir_path in [DAILYMED_DIR, RAW_DIR, EXTRACTED_DIR, TARGET_XML_DIR, ARCHIVE_DIR]:
     os.makedirs(dir_path, exist_ok=True)
 
 class DailyMedDownloader:
@@ -32,16 +37,58 @@ class DailyMedDownloader:
     def run(self):
         print("=== DailyMed Multi-Part Download ===")
         
-        # Download all parts
+        # Step 1: Archive existing XML files
+        self.archive_existing_files()
+        
+        # Step 2: Download all parts
         self.download_all_parts()
         
-        # Extract all parts
+        # Step 3: Extract all parts (first level)
         self.extract_all_parts()
         
-        # Clean up zip files
+        # Step 4: Extract inner zip files (second level)
+        self.extract_inner_zips()
+        
+        # Step 5: Filter and move XML files to target directory
+        self.filter_and_move_xml_files()
+        
+        # Step 6: Clean up zip files
         self.cleanup_zip_files()
         
+        # Step 7: Clean up extracted directory
+        self.cleanup_extracted_dir()
+        
         print("=== Download Complete ===")
+        print(f"New XML files are located in: {TARGET_XML_DIR}")
+    
+    def archive_existing_files(self):
+        """Archive existing XML files in the target directory."""
+        print("\n--- Archiving Existing Files ---")
+        
+        # Check if there are any files in TARGET_XML_DIR
+        files = os.listdir(TARGET_XML_DIR)
+        
+        if not files:
+            print(f"No existing files in {TARGET_XML_DIR} to archive.")
+            return
+        
+        # Create an archive subdirectory with today's date
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        archive_subdir = os.path.join(ARCHIVE_DIR, date_str)
+        os.makedirs(archive_subdir, exist_ok=True)
+        
+        # Move all files from TARGET_XML_DIR to the archive subdirectory
+        for file in files:
+            src_path = os.path.join(TARGET_XML_DIR, file)
+            dst_path = os.path.join(archive_subdir, file)
+            
+            try:
+                shutil.move(src_path, dst_path)
+                print(f"Archived: {file}")
+            except Exception as e:
+                print(f"Error archiving {file}: {e}")
+        
+        print(f"✅ Archived {len(files)} files to {archive_subdir}")
     
     def download_all_parts(self):
         """Download all 6 parts of the DailyMed release"""
@@ -105,6 +152,83 @@ class DailyMedDownloader:
         except Exception as e:
             print(f"❌ Error extracting {part_path}: {e}")
     
+    def extract_inner_zips(self):
+        """Find and extract all inner zip files."""
+        print("\n--- Extracting Inner Zips ---")
+        
+        inner_zip_count = 0
+        extracted_files_count = 0
+        
+        # Walk through the extracted directory to find .zip files
+        for root, dirs, files in os.walk(EXTRACTED_DIR):
+            for file in files:
+                if file.lower().endswith('.zip'):
+                    inner_zip_path = os.path.join(root, file)
+                    print(f"  Extracting inner zip: {file}...")
+                    
+                    try:
+                        # Extract the inner zip to the same directory as the zip file
+                        with zipfile.ZipFile(inner_zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(root)
+                        
+                        # Delete the inner zip file after extraction
+                        os.remove(inner_zip_path)
+                        
+                        inner_zip_count += 1
+                        # Count files extracted (heuristic based on zip size)
+                        extracted_files_count += 1 
+                        
+                        if inner_zip_count % 1000 == 0:
+                            print(f"  Processed {inner_zip_count} inner zips...")
+                            
+                    except Exception as e:
+                        print(f"❌ Error extracting inner zip {file}: {e}")
+        
+        print(f"✅ Extracted {inner_zip_count} inner zips")
+    
+    def filter_and_move_xml_files(self):
+        """Move XML files from extracted dir to target dir and delete non-XML files."""
+        print("\n--- Filtering and Moving XML Files ---")
+        
+        xml_count = 0
+        non_xml_count = 0
+        
+        # Walk through the extracted directory
+        for root, dirs, files in os.walk(EXTRACTED_DIR):
+            for file in files:
+                src_path = os.path.join(root, file)
+                
+                if file.lower().endswith('.xml'):
+                    # Move XML file to target directory
+                    dst_path = os.path.join(TARGET_XML_DIR, file)
+                    
+                    # Handle duplicate filenames (unlikely with DailyMed but good practice)
+                    if os.path.exists(dst_path):
+                        base, ext = os.path.splitext(file)
+                        count = 1
+                        while os.path.exists(dst_path):
+                            new_name = f"{base}_{count}{ext}"
+                            dst_path = os.path.join(TARGET_XML_DIR, new_name)
+                            count += 1
+                    
+                    try:
+                        shutil.move(src_path, dst_path)
+                        xml_count += 1
+                        if xml_count % 1000 == 0:
+                            print(f"  Moved {xml_count} XML files...")
+                    except Exception as e:
+                        print(f"Error moving {file}: {e}")
+                else:
+                    # Delete non-XML file
+                    try:
+                        os.remove(src_path)
+                        non_xml_count += 1
+                    except Exception as e:
+                        print(f"Error deleting {file}: {e}")
+        
+        print(f"✅ Moved {xml_count} XML files to {TARGET_XML_DIR}")
+        print(f"✅ Deleted {non_xml_count} non-XML files")
+    
     def cleanup_zip_files(self):
         """Clean up zip files to save space"""
         print("\n--- Cleaning Up Zip Files ---")
@@ -116,6 +240,17 @@ class DailyMedDownloader:
                 print(f"Removed {part}")
         
         print("✅ Cleanup complete")
+        
+    def cleanup_extracted_dir(self):
+        """Remove the empty extracted directory."""
+        print("\n--- Cleaning Up Extracted Directory ---")
+        
+        try:
+            if os.path.exists(EXTRACTED_DIR):
+                shutil.rmtree(EXTRACTED_DIR)
+                print(f"✅ Removed {EXTRACTED_DIR}")
+        except Exception as e:
+            print(f"Error removing extracted directory: {e}")
 
 if __name__ == "__main__":
     downloader = DailyMedDownloader()
