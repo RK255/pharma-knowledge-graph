@@ -419,8 +419,8 @@ class RxNormGRC20Converter:
                 if len(fields) < 8:
                     continue
                 
-                source_rxcui = fields[0]
-                target_rxcui = fields[4]
+                source_rxcui = fields[4]  # RXCUI2 - RELA describes RXCUI2 -> RXCUI1
+                target_rxcui = fields[0]  # RXCUI1
                 relationship = fields[7]
                 
                 if not source_rxcui or not target_rxcui or not relationship:

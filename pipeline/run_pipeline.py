@@ -172,9 +172,10 @@ STEPS = [
     },
     {
         "num": 9,
-        "name": "Link Dailymed to RxNorm",
-        "script": "03_ndc_bridge/03_link_dailymed_to_rxnorm.py",
-        "args": []
+        "name": "Link DailyMed to RxNorm (Set ID)",
+        "script": "03_ndc_bridge/03_link_dailymed_to_rxnorm_by_setid.py",
+        "args": [],
+        "description": "Links PackageInserts to RxNorm using SPL Set IDs (primary) and NDC fallback"
     },
     {
         "num": 10,
@@ -290,7 +291,6 @@ def clean_outputs():
     print("  ✅ Cleanup complete (preserved all data files)")
 
 def main():
-    print(f"DEBUG: main() called. sys.argv = {sys.argv}")
     parser = argparse.ArgumentParser(description="GRC-20 Pharmaceutical Pipeline Runner")
     parser.add_argument("--limit", type=int, help="Limit number of documents to process")
     parser.add_argument("--force", action="store_true", help="Force rerun of all steps")
@@ -398,8 +398,6 @@ def main():
             print(f"  Relations: {relations_file.name} ({relations_size:.2f} MB)")
             print(f"  Total Size: {total_size:.2f} MB")
             print(f"Finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    
 
 if __name__ == "__main__":
     main()

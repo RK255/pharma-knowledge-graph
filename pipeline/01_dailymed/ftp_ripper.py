@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# DailyMed Multi-Part Download Script
+# DailyMed Multi-Part Download Script (Rx + OTC)
 
 import os
 import requests
@@ -12,8 +12,6 @@ from datetime import datetime
 BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
 DAILYMED_DIR = f"{BASE_DIR}/data/dailymed"
 RAW_DIR = f"{DAILYMED_DIR}/raw"
-# We use 'extracted' as the temporary staging area for zip contents
-# We use 'xml_only' as the final destination for XML files
 EXTRACTED_DIR = f"{DAILYMED_DIR}/extracted"
 TARGET_XML_DIR = f"{DAILYMED_DIR}/xml_only"
 ARCHIVE_DIR = f"{DAILYMED_DIR}/archive"
@@ -25,7 +23,8 @@ for dir_path in [DAILYMED_DIR, RAW_DIR, EXTRACTED_DIR, TARGET_XML_DIR, ARCHIVE_D
 class DailyMedDownloader:
     def __init__(self):
         self.base_url = "https://dailymed-data.nlm.nih.gov/public-release-files/"
-        self.parts = [
+        # Rx archives (6 parts)
+        self.rx_parts = [
             "dm_spl_release_human_rx_part1.zip",
             "dm_spl_release_human_rx_part2.zip",
             "dm_spl_release_human_rx_part3.zip",
@@ -33,9 +32,26 @@ class DailyMedDownloader:
             "dm_spl_release_human_rx_part5.zip",
             "dm_spl_release_human_rx_part6.zip"
         ]
+        # OTC archives (11 parts)
+        self.otc_parts = [
+            "dm_spl_release_human_otc_part1.zip",
+            "dm_spl_release_human_otc_part2.zip",
+            "dm_spl_release_human_otc_part3.zip",
+            "dm_spl_release_human_otc_part4.zip",
+            "dm_spl_release_human_otc_part5.zip",
+            "dm_spl_release_human_otc_part6.zip",
+            "dm_spl_release_human_otc_part7.zip",
+            "dm_spl_release_human_otc_part8.zip",
+            "dm_spl_release_human_otc_part9.zip",
+            "dm_spl_release_human_otc_part10.zip",
+            "dm_spl_release_human_otc_part11.zip"
+        ]
+        # All parts combined
+        self.all_parts = self.rx_parts + self.otc_parts
     
     def run(self):
-        print("=== DailyMed Multi-Part Download ===")
+        print("=== DailyMed Multi-Part Download (Rx + OTC) ===")
+        print(f"Total parts to download: {len(self.all_parts)} (6 Rx + 11 OTC)")
         
         # Step 1: Archive existing XML files
         self.archive_existing_files()
@@ -60,24 +76,22 @@ class DailyMedDownloader:
         
         print("=== Download Complete ===")
         print(f"New XML files are located in: {TARGET_XML_DIR}")
+        print(f"Run the parser: python3 parser.py")
     
     def archive_existing_files(self):
         """Archive existing XML files in the target directory."""
         print("\n--- Archiving Existing Files ---")
         
-        # Check if there are any files in TARGET_XML_DIR
         files = os.listdir(TARGET_XML_DIR)
         
         if not files:
             print(f"No existing files in {TARGET_XML_DIR} to archive.")
             return
         
-        # Create an archive subdirectory with today's date
         date_str = datetime.now().strftime("%Y-%m-%d")
         archive_subdir = os.path.join(ARCHIVE_DIR, date_str)
         os.makedirs(archive_subdir, exist_ok=True)
         
-        # Move all files from TARGET_XML_DIR to the archive subdirectory
         for file in files:
             src_path = os.path.join(TARGET_XML_DIR, file)
             dst_path = os.path.join(archive_subdir, file)
@@ -91,10 +105,10 @@ class DailyMedDownloader:
         print(f"✅ Archived {len(files)} files to {archive_subdir}")
     
     def download_all_parts(self):
-        """Download all 6 parts of the DailyMed release"""
+        """Download all parts (Rx + OTC)"""
         print("\n--- Downloading All Parts ---")
         
-        for part in self.parts:
+        for part in self.all_parts:
             self.download_part(part)
         
         print("✅ All parts downloaded")
@@ -103,12 +117,10 @@ class DailyMedDownloader:
         """Download a single part"""
         part_path = os.path.join(RAW_DIR, part)
         
-        # Check if already downloaded
         if os.path.exists(part_path):
             print(f"✅ {part} already exists, skipping...")
             return part_path
         
-        # Download the part
         url = f"{self.base_url}{part}"
         print(f"Downloading {part}...")
         
@@ -132,7 +144,7 @@ class DailyMedDownloader:
         """Extract all parts to the same directory"""
         print("\n--- Extracting All Parts ---")
         
-        for part in self.parts:
+        for part in self.all_parts:
             part_path = os.path.join(RAW_DIR, part)
             if os.path.exists(part_path):
                 self.extract_part(part_path)
@@ -159,7 +171,6 @@ class DailyMedDownloader:
         inner_zip_count = 0
         extracted_files_count = 0
         
-        # Walk through the extracted directory to find .zip files
         for root, dirs, files in os.walk(EXTRACTED_DIR):
             for file in files:
                 if file.lower().endswith('.zip'):
@@ -167,15 +178,12 @@ class DailyMedDownloader:
                     print(f"  Extracting inner zip: {file}...")
                     
                     try:
-                        # Extract the inner zip to the same directory as the zip file
                         with zipfile.ZipFile(inner_zip_path, 'r') as zip_ref:
                             zip_ref.extractall(root)
                         
-                        # Delete the inner zip file after extraction
                         os.remove(inner_zip_path)
                         
                         inner_zip_count += 1
-                        # Count files extracted (heuristic based on zip size)
                         extracted_files_count += 1 
                         
                         if inner_zip_count % 1000 == 0:
@@ -193,16 +201,13 @@ class DailyMedDownloader:
         xml_count = 0
         non_xml_count = 0
         
-        # Walk through the extracted directory
         for root, dirs, files in os.walk(EXTRACTED_DIR):
             for file in files:
                 src_path = os.path.join(root, file)
                 
                 if file.lower().endswith('.xml'):
-                    # Move XML file to target directory
                     dst_path = os.path.join(TARGET_XML_DIR, file)
                     
-                    # Handle duplicate filenames (unlikely with DailyMed but good practice)
                     if os.path.exists(dst_path):
                         base, ext = os.path.splitext(file)
                         count = 1
@@ -219,7 +224,6 @@ class DailyMedDownloader:
                     except Exception as e:
                         print(f"Error moving {file}: {e}")
                 else:
-                    # Delete non-XML file
                     try:
                         os.remove(src_path)
                         non_xml_count += 1
@@ -233,7 +237,7 @@ class DailyMedDownloader:
         """Clean up zip files to save space"""
         print("\n--- Cleaning Up Zip Files ---")
         
-        for part in self.parts:
+        for part in self.all_parts:
             part_path = os.path.join(RAW_DIR, part)
             if os.path.exists(part_path):
                 os.remove(part_path)

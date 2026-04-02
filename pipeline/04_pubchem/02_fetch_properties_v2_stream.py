@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-PubChem Property Fetcher v19 (Corrected Mass Mapping)
+PubChem Property Fetcher v21 (Includes CID in Output)
 Optimized for large datasets with low memory footprint.
 Aggressively downloads GZIP files from PubChem FTP if data is missing.
+Includes misses reporting for debugging.
 """
 
 import os
@@ -31,11 +32,12 @@ PUBCHEM_FTP = "ftp.ncbi.nlm.nih.gov"
 PUBCHEM_PATH = "/pubchem/Compound/Extras"
 
 # Property Definitions (CLI Name -> File Prefix)
+# Note: pubchem_cid is NOT in this list - it comes from our mapping, not PubChem FTP
 AVAILABLE_PROPERTIES = {
     'smiles': 'CID-SMILES',
     'inchikey': 'CID-InChI-Key',
     'iupac_name': 'CID-IUPAC',
-    'molecular_weight': 'CID-Mass',  # CORRECTED: Use CID-Mass file
+    'molecular_weight': 'CID-Mass',
     'mesh': 'CID-MeSH',
     'date': 'CID-Date',
     'pmid': 'CID-PMID',
@@ -52,7 +54,7 @@ def download_from_ftp(file_prefix: str, target_dir: str) -> bool:
     local_path = os.path.join(target_dir, filename)
     
     if os.path.exists(local_path) and os.path.getsize(local_path) > 1000:
-        return True # File exists and has data
+        return True  # File exists and has data
         
     print(f"  Downloading {filename} from {PUBCHEM_FTP}...")
     
@@ -237,19 +239,38 @@ def update_entities_stream(
     output_file: str,
     rxcui_to_cid: Dict[str, str],
     property_data: Dict[str, Dict[str, str]],
-    schema_ids: Dict[str, str] # Maps prop name -> schema ID
-) -> None:
-    """Streams entities, updates them with resolved Schema IDs, writes output."""
+    schema_ids: Dict[str, str],
+    misses_file: str = None
+) -> Dict[str, int]:
+    """
+    Streams entities, updates them with resolved Schema IDs, writes output.
+    
+    FIXED: Removed the 1000 < RxCUI filter that was excluding low-numbered drugs
+    like acetaminophen (161) and amoxicillin (723).
+    
+    UPDATED: Now also writes pubchem_cid as a property.
+    
+    Returns stats dict.
+    """
     print(f"\n{'='*70}")
-    print("STREAMING ENTITY UPDATE (HEURISTIC SEARCH MODE)")
+    print("STREAMING ENTITY UPDATE")
     print(f"{'='*70}")
+    
+    # Get the CID property ID
+    cid_prop_id = schema_ids.get('pubchem_cid')
+    if cid_prop_id:
+        print(f"  Will write CID to property: {cid_prop_id}")
     
     stats = {
         'total_entities': 0,
         'entities_with_rxcui': 0,
         'entities_matched_cid': 0,
+        'entities_no_cid_match': 0,
         'properties_added': 0,
+        'cids_written': 0,
     }
+    
+    misses = []  # Track RxCUIs that had no CID mapping or no properties
     
     with open(input_file, 'r', encoding='utf-8') as f_in, \
          open(output_file, 'w', encoding='utf-8') as f_out:
@@ -265,17 +286,16 @@ def update_entities_stream(
             
             stats['total_entities'] += 1
             entity_rxcui = None
+            entity_name = entity.get('name', 'UNKNOWN')
 
-            # HEURISTIC SEARCH:
-            # Look for any value that is a numeric string within the RxCUI range (e.g., > 1000)
-            # and exists in our rxcui_to_cid mapping.
+            # FIXED: Check if value is numeric AND exists in our CID mapping
+            # Previously had a bug: "1000 < int(val_content)" which filtered out
+            # important drugs like acetaminophen (RxCUI 161) and amoxicillin (RxCUI 723)
             for value in entity.get('values', []):
                 val_content = str(value.get('value', ''))
-                # Check if it looks like an RxCUI and if we have a mapping for it
-                if val_content.isdigit() and 1000 < int(val_content) < 99999999:
-                    if val_content in rxcui_to_cid:
-                        entity_rxcui = val_content
-                        break
+                if val_content.isdigit() and val_content in rxcui_to_cid:
+                    entity_rxcui = val_content
+                    break
             
             if not entity_rxcui:
                 f_out.write(json.dumps(entity) + '\n')
@@ -285,12 +305,29 @@ def update_entities_stream(
 
             cid = rxcui_to_cid.get(entity_rxcui)
             if not cid:
+                # This shouldn't happen since we check above, but log it anyway
+                misses.append({
+                    'rxcui': entity_rxcui,
+                    'name': entity_name,
+                    'reason': 'no_cid_in_mapping'
+                })
+                stats['entities_no_cid_match'] += 1
                 f_out.write(json.dumps(entity) + '\n')
                 continue
 
             stats['entities_matched_cid'] += 1
 
+            # Write CID as a property (NEW)
+            if cid_prop_id:
+                entity['values'].append({
+                    "property": cid_prop_id,
+                    "value": cid
+                })
+                stats['properties_added'] += 1
+                stats['cids_written'] += 1
+
             # Add properties using resolved Schema IDs
+            props_added_for_entity = 0
             for prop_name, prop_dict in property_data.items():
                 prop_value = prop_dict.get(cid)
                 if prop_value:
@@ -302,6 +339,16 @@ def update_entities_stream(
                             "value": prop_value
                         })
                         stats['properties_added'] += 1
+                        props_added_for_entity += 1
+            
+            # Track if we matched CID but found no properties in PubChem data
+            if props_added_for_entity == 0:
+                misses.append({
+                    'rxcui': entity_rxcui,
+                    'name': entity_name,
+                    'cid': cid,
+                    'reason': 'cid_found_but_no_properties'
+                })
 
             f_out.write(json.dumps(entity) + '\n')
 
@@ -311,15 +358,44 @@ def update_entities_stream(
     print(f"\n{'='*70}")
     print(f"STREAMING COMPLETE")
     print(f"{'='*70}")
-    print(f"Total Entities:        {stats['total_entities']:,}")
-    print(f"Entities with RxCUI:   {stats['entities_with_rxcui']:,}")
-    print(f"Matched to CID:        {stats['entities_matched_cid']:,}")
-    print(f"Properties Added:      {stats['properties_added']:,}")
+    print(f"Total Entities:           {stats['total_entities']:,}")
+    print(f"Entities with RxCUI:      {stats['entities_with_rxcui']:,}")
+    print(f"Matched to CID:           {stats['entities_matched_cid']:,}")
+    print(f"No CID Match:             {stats['entities_no_cid_match']:,}")
+    print(f"CIDs Written:             {stats['cids_written']:,}")
+    print(f"Properties Added:         {stats['properties_added']:,}")
     print(f"{'='*70}")
+    
+    # Write misses report
+    if misses_file:
+        print(f"\nWriting misses report to {os.path.basename(misses_file)}...")
+        
+        # Summarize by reason
+        reasons = {}
+        for m in misses:
+            r = m.get('reason', 'unknown')
+            reasons[r] = reasons.get(r, 0) + 1
+        
+        report = {
+            'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'total_misses': len(misses),
+            'breakdown_by_reason': reasons,
+            'misses': misses
+        }
+        
+        with open(misses_file, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2)
+        
+        print(f"  {len(misses)} total misses logged.")
+        print(f"\n  Miss breakdown by reason:")
+        for r, count in reasons.items():
+            print(f"    {r}: {count}")
+    
+    return stats
 
 def main():
     print("=" * 70)
-    print("PUBCHEM PROPERTY FETCHER v19 (CORRECTED MASS)")
+    print("PUBCHEM PROPERTY FETCHER v21 (INCLUDES CID)")
     print("=" * 70)
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -338,7 +414,9 @@ def main():
 
     # 0. Initialize Schema and Resolve IDs (for OUTPUT only)
     schema = PharmaSchema()
-    props_to_resolve = properties_to_fetch
+    
+    # Include pubchem_cid in schema resolution (it's not in AVAILABLE_PROPERTIES but we need the ID)
+    props_to_resolve = properties_to_fetch + ['pubchem_cid']
     schema_ids = resolve_schema_ids(schema, props_to_resolve)
     
     if not schema_ids:
@@ -354,6 +432,7 @@ def main():
     # 2. Paths
     input_entities_file = os.path.join(OUTPUT_DIR, "rxnorm_entities.jsonl")
     output_entities_file = os.path.join(OUTPUT_DIR, "rxnorm_entities_enriched.jsonl")
+    misses_file = os.path.join(OUTPUT_DIR, "pubchem_misses_report.json")
     
     if not os.path.exists(input_entities_file):
         print(f"ERROR: {input_entities_file} not found.")
@@ -365,8 +444,15 @@ def main():
         print("ERROR: No property data loaded. Exiting.")
         return
 
-    # 4. Stream update
-    update_entities_stream(input_entities_file, output_entities_file, rxcui_to_cid, property_data, schema_ids)
+    # 4. Stream update with misses reporting
+    update_entities_stream(
+        input_entities_file, 
+        output_entities_file, 
+        rxcui_to_cid, 
+        property_data, 
+        schema_ids,
+        misses_file
+    )
 
     print("\nSUCCESS: Enrichment complete.")
 
