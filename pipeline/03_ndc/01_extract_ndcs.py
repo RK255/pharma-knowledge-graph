@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-NDC Extractor v4
-================
-Extract NDCs from RXNSAT.RRF with proper format normalization.
-Outputs:
-  - ndc_to_rxcui.json (NDC → RxCUI mapping for GRC-20 bridge)
+NDC and Set ID Extractor v5
+===========================
+Extract NDCs and SPL Set IDs from RXNSAT.RRF with proper format normalization.
 
-Handles: 11-digit, 5-4-2, 5-3-2, 4-4-2 formats
+Outputs:
+  - ndc_to_rxcui.json (NDC → RxCUI mapping)
+  - rxcui_to_setid.json (RxCUI → Set ID mapping for PI linking)
+
+Handles: 11-digit, 5-4-2, 5-3-2, 4-4-2 NDC formats
 
 Usage:
     python 01_extract_ndcs.py              # Interactive selection
@@ -98,205 +100,187 @@ def find_rxnsat_file(source_date=None, auto=False):
     
     # Auto-select if source_date provided
     if source_date:
-        # Handle both YYYY-MM-DD and MMDDYYYY formats
-        date_parts = source_date.split("-")
-        if len(date_parts) == 3:
-            y, m, d = date_parts
-            mmddyyyy = f"{m}{d}{y}"
-        else:
-            mmddyyyy = source_date
-        
-        for name, path in extracted_dirs:
-            if mmddyyyy in name:
-                print(f"\nAuto-selected: {name} (matched source_date: {source_date})")
-                return path, name
+        for subdir, path in extracted_dirs:
+            if source_date in subdir:
+                print(f"Using source date {source_date}: {subdir}")
+                return path
     
-    if auto or len(extracted_dirs) == 1:
-        print(f"\nAuto-selected: {extracted_dirs[0][0]}")
-        return extracted_dirs[0][1], extracted_dirs[0][0]
+    # Auto-select most recent if auto=True
+    if auto:
+        subdir, path = extracted_dirs[0]
+        print(f"Auto-selected most recent: {subdir}")
+        return path
     
+    # Interactive selection
     print("\nAvailable RXNSAT.RRF files:")
-    for i, (name, path) in enumerate(extracted_dirs, 1):
-        size_mb = os.path.getsize(path) / 1024 / 1024
-        print(f"  [{i}] {name} ({size_mb:.1f} MB)")
+    for i, (subdir, path) in enumerate(extracted_dirs, 1):
+        print(f"  [{i}] {subdir}")
     
+    choice = input("\nSelect source [1-{len(extracted_dirs)}]: ").strip()
     try:
-        choice = int(input(f"\nSelect [1-{len(extracted_dirs)}] (default: 1): ") or "1")
-        idx = max(1, min(choice, len(extracted_dirs))) - 1
-    except (ValueError, EOFError):
-        idx = 0
+        idx = int(choice) - 1
+        if 0 <= idx < len(extracted_dirs):
+            return extracted_dirs[idx][1]
+    except ValueError:
+        pass
     
-    return extracted_dirs[idx][1], extracted_dirs[idx][0]
+    print("Invalid selection, using most recent")
+    return extracted_dirs[0][1]
 
 
-def extract_date_from_filename(filename: str) -> str:
-    """Extract date from RxNorm filename like RxNorm02022026_extracted -> 2026-02-02."""
-    import re
-    match = re.search(r'RxNorm(\d{8})', filename)
-    if match:
-        date_str = match.group(1)
-        return f"{date_str[4:8]}-{date_str[:2]}-{date_str[2:4]}"
-    return None
+def parse_rxnsat(rxnsat_file: str):
+    """
+    Parse RXNSAT.RRF to extract NDCs and Set IDs.
+    
+    RXNSAT.RRF Format (pipe-delimited):
+    Field 1: RxCUI
+    Field 4: RXAUI
+    Field 9: ATN (Attribute Name) - NDC or SPL_SET_ID
+    Field 10: SAB (Source)
+    Field 11: ATV (Attribute Value) - the NDC code or Set ID
+    
+    Returns:
+        tuple: (ndc_to_rxcui, rxcui_to_ndcs, rxcui_to_setids)
+    """
+    print(f"\nParsing RXNSAT.RRF...")
+    print(f"  File: {rxnsat_file}")
+    
+    ndc_to_rxcui = {}
+    rxcui_to_ndcs = defaultdict(list)
+    rxcui_to_setids = defaultdict(list)
+    
+    stats = {
+        'total_lines': 0,
+        'ndc_entries': 0,
+        'setid_entries': 0,
+        'skipped_suppressed': 0,
+    }
+    
+    # Sources for NDC and Set ID
+    ndc_sources = {'RXNORM', 'MTHSPL'}
+    setid_sources = {'MTHSPL'}
+    
+    with open(rxnsat_file, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            stats['total_lines'] += 1
+            
+            fields = line.strip().split('|')
+            if len(fields) < 12:
+                continue
+            
+            rxcui = fields[0]
+            atn = fields[8]      # Attribute Name
+            sab = fields[9]      # Source
+            atv = fields[10]     # Attribute Value
+            suppress = fields[11] if len(fields) > 11 else ""
+            
+            # Skip suppressed entries
+            if suppress == "Y":
+                stats['skipped_suppressed'] += 1
+                continue
+            
+            # Extract NDC
+            if atn == 'NDC' and sab in ndc_sources:
+                normalized_ndc = normalize_ndc_to_542(atv)
+                if normalized_ndc:
+                    ndc_to_rxcui[normalized_ndc] = rxcui
+                    rxcui_to_ndcs[rxcui].append(normalized_ndc)
+                    stats['ndc_entries'] += 1
+            
+            # Extract SPL_SET_ID
+            elif atn == 'SPL_SET_ID' and sab in setid_sources:
+                if atv:
+                    rxcui_to_setids[rxcui].append(atv)
+                    stats['setid_entries'] += 1
+    
+    # Deduplicate set IDs per RxCUI
+    for rxcui in rxcui_to_setids:
+        rxcui_to_setids[rxcui] = list(set(rxcui_to_setids[rxcui]))
+    
+    print(f"\n  Processed {stats['total_lines']:,} lines")
+    print(f"  NDC entries: {stats['ndc_entries']:,}")
+    print(f"  Set ID entries: {stats['setid_entries']:,}")
+    print(f"  Skipped (suppressed): {stats['skipped_suppressed']:,}")
+    
+    return ndc_to_rxcui, dict(rxcui_to_ndcs), dict(rxcui_to_setids)
 
 
-def main(source_date=None, auto=False, rxnorm_dir=None):
-	print("=" * 70)
-	print("NDC EXTRACTOR v4 - NDC + RxCUI Mapping")
-	print("=" * 70)
-	print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-	
-	# Find RXNSAT file
-	# If a specific source directory is provided, use it directly
-	if rxnorm_dir:
-		# Construct the path to RXNSAT.RRF
-		rxnsat_path = os.path.join(rxnorm_dir, "rrf", "RXNSAT.RRF")
-		if os.path.exists(rxnsat_path):
-			rxnsat_file = rxnsat_path
-			# Extract source name from the directory path
-			source_name = os.path.basename(rxnorm_dir.rstrip('/'))
-			print(f"  [INFO] Using specified RxNorm directory: {source_name}")
-		else:
-			# Try without 'rrf' subdirectory
-			rxnsat_path = os.path.join(rxnorm_dir, "RXNSAT.RRF")
-			if os.path.exists(rxnsat_path):
-				rxnsat_file = rxnsat_path
-				source_name = os.path.basename(rxnorm_dir.rstrip('/'))
-				print(f"  [INFO] Using specified RxNorm directory: {source_name}")
-			else:
-				print(f"  [ERROR] RXNSAT.RRF not found in specified directory: {rxnorm_dir}")
-				sys.exit(1)
-	else:
-		# Fall back to existing file selection logic
-		rxnsat_file, source_name = find_rxnsat_file(source_date=source_date, auto=auto)
-	
-	actual_source_date = extract_date_from_filename(source_name)
-	
-	# Save source selection for bridge step
-	save_source_selection("RxNorm_RXNSAT", rxnsat_file, {
-		"source_name": source_name,
-		"source_date": actual_source_date
-	})
-	
-	# Stats
-	stats = defaultdict(int)
-	ndc_data = defaultdict(lambda: {"sources": set(), "rxcuis": set()})
-	rxcui_to_ndcs = defaultdict(set)
-	
-	print(f"\n[1/2] Processing: {rxnsat_file}")
-	
-	with open(rxnsat_file, 'r') as f:
-		for line_num, line in enumerate(f, 1):
-			if line_num % 500000 == 0:
-				print(f"  Processed {line_num:,} lines...")
-			
-			parts = line.strip().split('|')
-			if len(parts) < 11:
-				continue
-			
-			# Check for NDC attribute
-			attr_type = parts[8] if len(parts) > 8 else ""
-			if attr_type != "NDC":
-				continue
-			
-			rxcui = parts[0].strip() if len(parts) > 0 else ""
-			source = parts[9] if len(parts) > 9 else ""
-			ndc_raw = parts[10] if len(parts) > 10 else ""
-			
-			if not ndc_raw or not rxcui:
-				continue
-			
-			stats[f"source_{source}"] += 1
-			
-			# Normalize NDC
-			ndc_normalized = normalize_ndc_to_542(ndc_raw)
-			
-			if ndc_normalized:
-				stats["normalized"] += 1
-				ndc_data[ndc_normalized]["sources"].add(source)
-				ndc_data[ndc_normalized]["rxcuis"].add(rxcui)
-				rxcui_to_ndcs[rxcui].add(ndc_normalized)
-			else:
-				stats["failed_normalize"] += 1
-	
-	# Stats output
-	print(f"\n{'='*70}")
-	print("STATISTICS")
-	print(f"{'='*70}")
-	print(f"RXNORM source NDCs: {stats['source_RXNORM']:,}")
-	print(f"MTHSPL source NDCs: {stats['source_MTHSPL']:,}")
-	print(f"Normalized: {stats['normalized']:,}")
-	print(f"Failed to normalize: {stats.get('failed_normalize', 0):,}")
-	print(f"Unique NDCs: {len(ndc_data):,}")
-	print(f"Unique RxCUIs: {len(rxcui_to_ndcs):,}")
-	
-	# Count by source combination
-	rxnorm_only = sum(1 for d in ndc_data.values() if d["sources"] == {"RXNORM"})
-	mthspl_only = sum(1 for d in ndc_data.values() if d["sources"] == {"MTHSPL"})
-	both = sum(1 for d in ndc_data.values() if d["sources"] == {"RXNORM", "MTHSPL"})
-	
-	print(f"\nNDC Coverage:")
-	print(f"  RXNORM only: {rxnorm_only:,}")
-	print(f"  MTHSPL only: {mthspl_only:,}")
-	print(f"  Both sources: {both:,}")
-	
-	# Output: ndc_to_rxcui.json
-	output_json = f"{OUTPUT_DIR}/ndc_to_rxcui.json"
-	print(f"\n[2/2] Writing: {output_json}")
-	
-	# Build mappings
-	ndc_to_rxcui = {}
-	for ndc, data in ndc_data.items():
-		rxcuis = sorted(data["rxcuis"])
-		# Store as single string if only one RxCUI, else list
-		ndc_to_rxcui[ndc] = rxcuis[0] if len(rxcuis) == 1 else rxcuis
-	
-	rxcui_to_ndcs_list = {rxcui: sorted(ndcs) for rxcui, ndcs in rxcui_to_ndcs.items()}
-	
-	output_data = {
-		"ndc_to_rxcui": ndc_to_rxcui,
-		"rxcui_to_ndcs": rxcui_to_ndcs_list,
-		"stats": {
-			"total_ndcs": len(ndc_data),
-			"total_rxcuis": len(rxcui_to_ndcs),
-			"by_source": {
-				"rxnorm_only": rxnorm_only,
-				"mthspl_only": mthspl_only,
-				"both": both
-			}
-		},
-		"source": source_name,
-		"source_date": actual_source_date,
-		"created": datetime.now().isoformat()
-	}
-	
-	with open(output_json, 'w') as f:
-		json.dump(output_data, f, indent=2)
-	
-	size_mb = os.path.getsize(output_json) / 1024 / 1024
-	print(f"  ✅ Wrote {size_mb:.1f} MB ({len(ndc_data):,} NDCs)")
-	
-	# Show sample
-	print(f"\nSample NDC → RxCUI:")
-	for i, (ndc, data) in enumerate(sorted(ndc_data.items())[:5]):
-		sources = ",".join(sorted(data["sources"]))
-		rxcuis = ",".join(sorted(data["rxcuis"])[:3])
-		if len(data["rxcuis"]) > 3:
-			rxcuis += "..."
-		print(f"  {ndc} [{sources}] → {rxcuis}")
-	
-	print(f"\n{'='*70}")
-	print("EXTRACTION COMPLETE")
-	print(f"{'='*70}")
-	return output_json
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Extract NDC codes from RxNorm RXNSAT.RRF")
-    parser.add_argument("--auto", action="store_true", help="Use most recent source (no prompts)")
-    parser.add_argument("--source-date", help="Auto-select source with this date (YYYY-MM-DD)")
-    parser.add_argument("--rxnorm-dir", help="Direct path to RxNorm extracted directory")
-    return parser.parse_args()
+def main():
+    parser = argparse.ArgumentParser(description='Extract NDCs and Set IDs from RXNSAT.RRF')
+    parser.add_argument("--auto", action="store_true", help="Auto-select most recent source")
+    parser.add_argument("--rxnorm-dir", help="Path to extracted RxNorm directory")
+    parser.add_argument('--source-date', help='Match specific source date (YYYY-MM-DD)')
+    args = parser.parse_args()
+    
+    print("=" * 80)
+    print("NDC AND SET ID EXTRACTOR")
+    print("=" * 80)
+    
+    # Find RXNSAT file
+    if args.rxnorm_dir:
+        rxnsat_file = os.path.join(args.rxnorm_dir, "rrf", "RXNSAT.RRF")
+        if not os.path.exists(rxnsat_file):
+            print(f"ERROR: RXNSAT.RRF not found at {rxnsat_file}")
+            sys.exit(1)
+        print(f"Using RxNorm directory: {args.rxnorm_dir}")
+    else:
+        rxnsat_file = find_rxnsat_file(args.source_date, args.auto)
+    
+    # Parse and extract
+    ndc_to_rxcui, rxcui_to_ndcs, rxcui_to_setids = parse_rxnsat(rxnsat_file)
+    
+    # Save outputs
+    source_date = None
+    for part in rxnsat_file.split('/'):
+        if 'RxNorm' in part and '_' in part:
+            source_date = part.replace('RxNorm', '').replace('_extracted', '')
+            break
+    
+    # Save NDC mappings
+    ndc_output = {
+        'ndc_to_rxcui': ndc_to_rxcui,
+        'rxcui_to_ndcs': rxcui_to_ndcs,
+        'stats': {
+            'ndc_count': len(ndc_to_rxcui),
+            'rxcui_count': len(rxcui_to_ndcs),
+        },
+        'source': 'RXNSAT.RRF',
+        'source_date': source_date,
+        'created': datetime.now().isoformat(),
+    }
+    
+    ndc_file = os.path.join(OUTPUT_DIR, "ndc_to_rxcui.json")
+    with open(ndc_file, 'w') as f:
+        json.dump(ndc_output, f)
+    print(f"\n✓ Saved {len(ndc_to_rxcui):,} NDC → RxCUI mappings to {ndc_file}")
+    
+    # Save Set ID mappings
+    setid_output = {
+        'rxcui_to_setids': rxcui_to_setids,
+        'stats': {
+            'rxcui_count': len(rxcui_to_setids),
+            'setid_count': sum(len(s) for s in rxcui_to_setids.values()),
+        },
+        'source': 'RXNSAT.RRF',
+        'source_date': source_date,
+        'created': datetime.now().isoformat(),
+    }
+    
+    setid_file = os.path.join(OUTPUT_DIR, "rxcui_to_setid.json")
+    with open(setid_file, 'w') as f:
+        json.dump(setid_output, f)
+    print(f"✓ Saved {len(rxcui_to_setids):,} RxCUI → Set ID mappings to {setid_file}")
+    
+    # Save source selection
+    save_source_selection("NDC", {
+        'file': rxnsat_file,
+        'metadata': {'source_date': source_date},
+    })
+    
+    print("\n" + "=" * 80)
+    print("EXTRACTION COMPLETE")
+    print("=" * 80)
 
 
-if __name__ == "__main__":
-    args = parse_args()
-    main(source_date=args.source_date, auto=args.auto, rxnorm_dir=args.rxnorm_dir)
+if __name__ == '__main__':
+    main()

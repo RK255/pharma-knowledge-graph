@@ -57,7 +57,7 @@ def run_parser(xml_dir: Path, output_dir: Path, limit: int = None, progress=None
         progress.report(0.1, "Parsing XML files...")
     
     try:
-        from parser import process_xml_files
+        from spl_parser import process_xml_files
         output_dir.mkdir(parents=True, exist_ok=True)
         result = process_xml_files(str(xml_dir), limit=limit, output_dir=str(output_dir), progress=progress)
         

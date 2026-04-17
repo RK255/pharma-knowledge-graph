@@ -13,7 +13,7 @@ from datetime import datetime
 
 # Import from schema and utils
 sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
-from pharma_schema import PharmaSchema
+from pharma_schema import PharmaSchema, SECTION_RELATION_IDS
 
 sys.path.insert(0, str(Path(__file__).parent))
 from grc20_utils import generate_uuid, GRC20_VALUE_TYPES
@@ -21,30 +21,25 @@ from grc20_utils import generate_uuid, GRC20_VALUE_TYPES
 # Initialize schema
 schema = PharmaSchema()
 
-# GRC-20 Specification Constants (from schema)
-def _build_property_dict(names):
-    """Build a dict of property IDs, skipping any that don't exist in schema."""
-    result = {}
-    for name in names:
-        prop_id = schema.prop(name)
-        if prop_id:
-            result[name] = prop_id
-    return result
-
-GRC20_SPEC = {
-    "value_types": GRC20_VALUE_TYPES,
-    "standard_attributes": _build_property_dict(["name", "description"]),
+# Property names we use from schema
+PROPERTIES = {
+    "name": schema.prop("name"),
+    "description": schema.prop("description"),
+    "content": schema.prop("content"),
+    "section_type": schema.prop("section_type"),
+    "loinc_code": schema.prop("loinc_code") if "loinc_code" in schema.properties else None,
+    "effective_time": schema.prop("effective_time"),
+    "ndc_code": schema.prop("ndc_code"),
+    "rxcui": schema.prop("rxcui"),
+    "fda_set_id": schema.prop("fda_set_id") if "fda_set_id" in schema.properties else None,
+    "source": schema.prop("source"),
+    "citation": schema.prop("citation"),
+    "date_accessed": schema.prop("date_accessed"),
+    "source_url": schema.prop("source_url"),
+    "provenance_type": schema.prop("provenance_type"),
 }
 
-# Property mappings from schema (lazy-loaded)
-PROPERTIES = _build_property_dict([
-    "name", "description", "content", "section_type",
-     "effective_time", "ndc_code",
-     
-    "source", "citation", "date_accessed", "source_url", "provenance_type"
-])
-
-# Entity type mappings from schema
+# Entity type IDs from schema
 ENTITY_TYPES = {
     "PackageInsert": schema.type_id("PackageInsert"),
     "Section": schema.type_id("Section"),
@@ -53,51 +48,44 @@ ENTITY_TYPES = {
     "NDC": schema.type_id("NDC"),
 }
 
-# Relation mappings from schema
+# Core relations from schema
 RELATIONS = {
     "has_section": schema.relations.get("has_section"),
     "section_of": schema.relations.get("section_of"),
     "manufactured_by": schema.relations.get("manufactured_by"),
     "manufactures": schema.relations.get("manufactures"),
     "has_provenance": schema.relations.get("has_provenance"),
-    "Types": schema.relations.get("Types"),
+    "maps_to_rxcui": schema.relations.get("maps_to_rxcui"),
 }
 
-# Manufacturer deduplication - track by name
-MANUFACTURER_LOOKUP = {}  # name -> entity_id
+# Build section type to relation mapping from schema
+SECTION_TYPE_TO_RELATION = {}
+for rel_name, rel_id in SECTION_RELATION_IDS.items():
+    # Map "has_adverse_reactions_section" -> "ADVERSE_REACTIONS"
+    if rel_name.startswith("has_") and rel_name.endswith("_section"):
+        section_type = rel_name[4:-8].upper()  # Remove "has_" and "_section"
+        SECTION_TYPE_TO_RELATION[section_type] = {
+            "forward": rel_id,
+            "forward_name": rel_name,
+            "inverse": SECTION_RELATION_IDS.get(rel_name.replace("has_", "") + "_of"),
+            "inverse_name": rel_name.replace("has_", "") + "_of"
+        }
 
-def create_value(property_name: str, value, value_type: str = "TEXT") -> dict:
-    """Create a GRC-20 value for an entity's values array.
-    
-    Args:
-        property_name: Name of the property (e.g., "name", "description")
-        value: The value to store
-        value_type: GRC-20 value type (TEXT, INTEGER, etc.)
-    
-    Returns:
-        dict with 'property' and 'value' keys, or None if property not found
-    """
-    prop_id = schema.prop(property_name)
-    if not prop_id:
-        return None  # Property not in schema, skip
-    
+# Manufacturer deduplication
+MANUFACTURER_LOOKUP = {}
+
+def create_value(property_name: str, value) -> dict:
+    """Create a GRC-20 value for an entity's values array."""
+    prop_id = PROPERTIES.get(property_name)
+    if not prop_id or value is None:
+        return None
     return {
         "property": prop_id,
         "value": str(value) if value is not None else ""
     }
 
 def create_entity(entity_id: str, entity_type: str, name: str, values: list = None) -> dict:
-    """Create a GRC-20 entity with proper structure.
-    
-    Args:
-        entity_id: UUID for the entity
-        entity_type: Type name (e.g., "PackageInsert", "Section")
-        name: Entity name
-        values: List of value dicts from create_value()
-    
-    Returns:
-        Entity dict with 'id', 'name', 'types', 'values'
-    """
+    """Create a GRC-20 entity with proper structure."""
     type_id = ENTITY_TYPES.get(entity_type)
     if not type_id:
         print(f"WARNING: Unknown entity type: {entity_type}")
@@ -112,18 +100,7 @@ def create_entity(entity_id: str, entity_type: str, name: str, values: list = No
     return entity
 
 def create_relation(relation_id: str, relation_type: str, from_id: str, to_id: str, position: str = None) -> dict:
-    """Create a GRC-20 relation with proper structure.
-    
-    Args:
-        relation_id: UUID for the relation
-        relation_type: Type name (e.g., "has_section", "manufactured_by")
-        from_id: Source entity ID
-        to_id: Target entity ID
-        position: Optional position string for ordering
-    
-    Returns:
-        Relation dict with 'id', 'type', 'from', 'to'
-    """
+    """Create a GRC-20 relation with proper structure."""
     type_id = RELATIONS.get(relation_type)
     if not type_id:
         print(f"WARNING: Unknown relation type: {relation_type}")
@@ -142,24 +119,15 @@ def create_relation(relation_id: str, relation_type: str, from_id: str, to_id: s
     return relation
 
 def get_or_create_manufacturer(manufacturer_name: str) -> str:
-    """Get or create a manufacturer entity, deduplicating by name.
-    
-    Args:
-        manufacturer_name: Name of the manufacturer
-    
-    Returns:
-        Entity ID for the manufacturer
-    """
+    """Get or create a manufacturer entity, deduplicating by name."""
     if not manufacturer_name:
         return None
     
-    # Normalize name for deduplication
     normalized_name = manufacturer_name.strip().lower()
     
     if normalized_name in MANUFACTURER_LOOKUP:
         return MANUFACTURER_LOOKUP[normalized_name]
     
-    # Create new manufacturer
     entity_id = generate_uuid(seed=f"manufacturer:{normalized_name}")
     MANUFACTURER_LOOKUP[normalized_name] = entity_id
     
@@ -167,10 +135,6 @@ def get_or_create_manufacturer(manufacturer_name: str) -> str:
 
 def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
     """Convert a single DailyMed document to GRC-20 entities and relations.
-    
-    Args:
-        doc: Parsed DailyMed document dict
-        provenance_id: Optional provenance entity ID
     
     Returns:
         Tuple of (entities, relations) lists
@@ -184,9 +148,8 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
     manufacturer = doc.get("manufacturer", "")
     effective_date = doc.get("effective_time", "")
     ndcs = doc.get("ndc_codes", [])
-    # Application info is single-valued, not a list
-    application_number = doc.get( "")
-    application_type = doc.get( "")
+    application_number = doc.get("application_number", "")
+    application_type = doc.get("application_type", "")
     sections = doc.get("sections", [])
     
     # Create PackageInsert entity
@@ -213,7 +176,7 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
     # Add provenance relation
     if provenance_id and RELATIONS.get("has_provenance"):
         rel = create_relation(
-            relation_id=generate_uuid(seed=f"rel:provenance:{package_insert_id}"),
+            relation_id=generate_uuid(seed=f"rel:prov:{package_insert_id}"),
             relation_type="has_provenance",
             from_id=package_insert_id,
             to_id=provenance_id
@@ -225,24 +188,26 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
     if manufacturer:
         manufacturer_id = get_or_create_manufacturer(manufacturer)
         if manufacturer_id and manufacturer_id not in [e["id"] for e in entities]:
+            mfr_values = [create_value("name", manufacturer)]
             mfr_entity = create_entity(
                 entity_id=manufacturer_id,
                 entity_type="Manufacturer",
                 name=manufacturer,
-                values=[create_value("name", manufacturer)]
+                values=mfr_values
             )
             if mfr_entity:
                 entities.append(mfr_entity)
             
-            # Add provenance relation for Manufacturer entity
-            prov_rel = create_relation(
-                relation_id=generate_uuid(seed=f"prov:mfr:{manufacturer_id}"),
-                relation_type="has_provenance",
-                from_id=manufacturer_id,
-                to_id=provenance_id  # DailyMed Provenance Entity ID
-            )
-            if prov_rel:
-                relations.append(prov_rel)
+            # Add provenance relation
+            if provenance_id:
+                prov_rel = create_relation(
+                    relation_id=generate_uuid(seed=f"prov:mfr:{manufacturer_id}"),
+                    relation_type="has_provenance",
+                    from_id=manufacturer_id,
+                    to_id=provenance_id
+                )
+                if prov_rel:
+                    relations.append(prov_rel)
         
         # Create manufactured_by relation
         if manufacturer_id and RELATIONS.get("manufactured_by"):
@@ -261,30 +226,37 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
             continue
         
         ndc_id = generate_uuid(seed=f"ndc:{ndc_code}")
+        ndc_values = [create_value("name", ndc_code)]
+        ndc_code_val = create_value("ndc_code", ndc_code)
+        if ndc_code_val:
+            ndc_values.append(ndc_code_val)
+        
         ndc_entity = create_entity(
             entity_id=ndc_id,
             entity_type="NDC",
             name=ndc_code,
-            values=[create_value("ndc_code", ndc_code)]
+            values=ndc_values
         )
         if ndc_entity:
             entities.append(ndc_entity)
         
-        # Add provenance relation for NDC entity
-        prov_rel = create_relation(
-            relation_id=generate_uuid(seed=f"prov:ndc:{ndc_code}"),
-            relation_type="has_provenance",
-            from_id=ndc_id,
-            to_id=provenance_id  # DailyMed Provenance Entity ID
-        )
-        if prov_rel:
-            relations.append(prov_rel)
+        # Add provenance relation for NDC
+        if provenance_id:
+            prov_rel = create_relation(
+                relation_id=generate_uuid(seed=f"prov:ndc:{ndc_code}"),
+                relation_type="has_provenance",
+                from_id=ndc_id,
+                to_id=provenance_id
+            )
+            if prov_rel:
+                relations.append(prov_rel)
         
         # Create relation from package insert to NDC
-        if RELATIONS.get("has_section"):  # reuse has_section pattern
+        # Using has_section as placeholder - could add proper has_ndc relation
+        if RELATIONS.get("has_section"):
             rel = create_relation(
                 relation_id=generate_uuid(seed=f"rel:ndc:{package_insert_id}:{ndc_code}"),
-                relation_type="has_section",  # TODO: Add proper NDC relation
+                relation_type="has_section",
                 from_id=package_insert_id,
                 to_id=ndc_id,
                 position=str(idx)
@@ -292,68 +264,75 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
             if rel:
                 relations.append(rel)
     
-    # Create FDA Application entity (single-valued)
-    if application_number:
-        app_id = generate_uuid(seed=f"fda_app:{application_type}:{application_number}")
-        app_values = []
-        if application_type:
-            app_values.append(create_value( application_type))
-        if application_number:
-            app_values.append(create_value( application_number))
-        
-        app_entity = create_entity(
-            entity_id=app_id,
-            entity_type="FDAApplication",
-            name=f"{application_type} {application_number}" if application_type else application_number,
-            values=app_values
-        )
-        if app_entity:
-            entities.append(app_entity)
-        
-        # Create relation
-        if RELATIONS.get("has_application"):
-            rel = create_relation(
-                relation_id=generate_uuid(seed=f"rel:app:{package_insert_id}:{application_number}"),
-                relation_type="has_application",
-                from_id=package_insert_id,
-                to_id=app_id
-            )
-            if rel:
-                relations.append(rel)
-    
-    # Create Section entities
+    # Create Section entities with typed relations
     for idx, section in enumerate(sections):
-        section_code = section.get("code", "")
+        section_type = section.get("section_type", "")
         section_title = section.get("title", "")
         section_content = section.get("content", "")
+        section_loinc = section.get("loinc_code", "")
+        section_unique_id = section.get("section_unique_id", "")
         
-        if not section_code:
+        if not section_type:
             continue
         
-        section_id = generate_uuid(seed=f"section:{set_id}:{section_code}")
+        # Use section_unique_id if available, otherwise generate from set_id + section_type
+        if section_unique_id:
+            section_id = section_unique_id
+        else:
+            section_id = generate_uuid(seed=f"section:{set_id}:{section_type}:{idx}")
         
+        # Build section values
         section_values = []
         if section_title:
             section_values.append(create_value("name", section_title))
-        if section_code:
-            section_values.append(create_value("section_type", section_code))
+        if section_type:
+            section_values.append(create_value("section_type", section_type))
+        if section_loinc:
+            section_values.append(create_value("loinc_code", section_loinc))
         if section_content:
-            section_values.append(create_value("content", section_content[:10000]))  # Limit content size
+            # Limit content size to prevent huge entities
+            content_val = section_content[:50000] if len(section_content) > 50000 else section_content
+            section_values.append(create_value("content", content_val))
         
         section_entity = create_entity(
             entity_id=section_id,
             entity_type="Section",
-            name=section_title or section_code,
+            name=section_title or section_type,
             values=section_values
         )
         
         if section_entity:
             entities.append(section_entity)
         
-        # Create has_section relation
-        if RELATIONS.get("has_section"):
+        # Add provenance relation
+        if provenance_id:
+            prov_rel = create_relation(
+                relation_id=generate_uuid(seed=f"prov:sec:{section_id}"),
+                relation_type="has_provenance",
+                from_id=section_id,
+                to_id=provenance_id
+            )
+            if prov_rel:
+                relations.append(prov_rel)
+        
+        # Create section relation using typed relation if available
+        relation_mapping = SECTION_TYPE_TO_RELATION.get(section_type, {})
+        
+        if relation_mapping:
+            # Use typed relation (e.g., has_adverse_reactions_section)
+            rel_id = relation_mapping["forward"]
+            rel = {
+                "id": generate_uuid(seed=f"rel:sec:{package_insert_id}:{section_type}"),
+                "type": rel_id,
+                "from": package_insert_id,
+                "to": section_id,
+                "position": str(idx)
+            }
+            relations.append(rel)
+        elif RELATIONS.get("has_section"):
+            # Fallback to generic has_section
             rel = create_relation(
-                relation_id=generate_uuid(seed=f"rel:section:{package_insert_id}:{section_code}"),
+                relation_id=generate_uuid(seed=f"rel:sec:{package_insert_id}:{section_type}"),
                 relation_type="has_section",
                 from_id=package_insert_id,
                 to_id=section_id,
@@ -365,17 +344,19 @@ def convert_document_to_grc20(doc: dict, provenance_id: str = None) -> tuple:
     return entities, relations
 
 def convert_dataset_to_grc20(input_path: str, output_path: str, progress=None) -> dict:
-    output_dir = Path(output_path).parent
-
     """Convert entire DailyMed dataset to GRC-20 format.
     
     Args:
         input_path: Path to parsed DailyMed JSON
-        output_path: Path for output GRC-20 JSON
+        output_path: Path for output JSON
+        progress: Optional progress callback
     
     Returns:
-        Statistics dict
+        Tuple of (entities, relations, stats)
     """
+    output_dir = Path(output_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     print(f"Loading parsed data from {input_path}")
     
     with open(input_path, 'r') as f:
@@ -383,82 +364,74 @@ def convert_dataset_to_grc20(input_path: str, output_path: str, progress=None) -
     
     print(f"Loaded {len(documents)} documents")
     
-    # Create provenance entity using the schema's deterministic ID
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent / "00_schema"))
-    from pharma_schema import PharmaSchema
-    schema = PharmaSchema()
-    
-    # Use the schema's provenance system for consistent IDs
+    # Create provenance entity
     provenance_entity = schema.create_provenance_entity("DailyMed")
     provenance_id = provenance_entity["id"]
     print(f"  DailyMed provenance ID: {provenance_id}")
     
-    all_entities = [provenance_entity] if provenance_entity else []
+    all_entities = [provenance_entity]
     all_relations = []
     
     stats = {
         "total_documents": len(documents),
-        "total_entities": len(all_entities),
-        "total_relations": 0,
         "entities_by_type": {"Provenance": 1},
         "relations_by_type": {}
     }
     
     # Process each document
     for i, doc in enumerate(documents):
-        if (i + 1) % 5000 == 0:
-            print(f"  Processed {i + 1}/{len(documents)} documents...")
+        if progress and i % 100 == 0:
+            progress.report(i / len(documents), f"Converting document {i+1}/{len(documents)}")
         
         entities, relations = convert_document_to_grc20(doc, provenance_id)
         
         for entity in entities:
             all_entities.append(entity)
-            type_name = entity.get("types", ["Unknown"])[0]
-            # Reverse lookup type name
+            # Get type name
+            type_id = entity.get("types", [None])[0]
+            type_name = "Unknown"
             for name, tid in ENTITY_TYPES.items():
-                if tid == type_name:
+                if tid == type_id:
                     type_name = name
                     break
             stats["entities_by_type"][type_name] = stats["entities_by_type"].get(type_name, 0) + 1
         
         for relation in relations:
             all_relations.append(relation)
-            # Reverse lookup relation type name
+            # Get relation type name
             type_id = relation.get("type", "Unknown")
             type_name = "Unknown"
             for name, tid in RELATIONS.items():
                 if tid == type_id:
                     type_name = name
                     break
+            # Also check section relations
+            if type_name == "Unknown":
+                for name, tid in SECTION_RELATION_IDS.items():
+                    if tid == type_id:
+                        type_name = name
+                        break
             stats["relations_by_type"][type_name] = stats["relations_by_type"].get(type_name, 0) + 1
     
     stats["total_entities"] = len(all_entities)
     stats["total_relations"] = len(all_relations)
     
-    # Write entities as JSONL
+    # Write outputs
     entities_path = output_dir / "dailymed_entities.jsonl"
     relations_path = output_dir / "dailymed_relations.jsonl"
     
     with open(entities_path, 'w') as f:
         for entity in all_entities:
             f.write(json.dumps(entity) + '\n')
-            
+    
     with open(relations_path, 'w') as f:
         for relation in all_relations:
             f.write(json.dumps(relation) + '\n')
     
-    print(f"Writing {len(all_entities)} entities to {entities_path}")
-    print(f"Writing {len(all_relations)} relations to {relations_path}")
+    print(f"Wrote {len(all_entities)} entities to {entities_path}")
+    print(f"Wrote {len(all_relations)} relations to {relations_path}")
     
-    # Calculate quality scores
-    scores = {
-        "completeness": 0.95,
-        "consistency": 0.98,
-    }
-    overall = sum(scores.values()) / len(scores) if scores else 0.0
-    
-    return all_entities, all_relations, scores, overall
+    return all_entities, all_relations, stats
 
 if __name__ == "__main__":
     import argparse
@@ -469,11 +442,14 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    stats = convert_dataset_to_grc20(args.input, args.output)
+    entities, relations, stats = convert_dataset_to_grc20(args.input, args.output)
     
     print("\nConversion complete!")
-    print(f"  Total entities: {stats[0]}")
-    print(f"  Total relations: {stats[1]}")
-    print(f"  Total entities: {stats[0]}")
-    print(f"  Total relations: {stats[1]}")
-    # entities_by_type is not available in the current implementation
+    print(f"  Total entities: {len(entities)}")
+    print(f"  Total relations: {len(relations)}")
+    print("\nEntities by type:")
+    for type_name, count in sorted(stats["entities_by_type"].items()):
+        print(f"  {type_name}: {count}")
+    print("\nRelations by type:")
+    for rel_name, count in sorted(stats["relations_by_type"].items()):
+        print(f"  {rel_name}: {count}")

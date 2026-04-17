@@ -149,6 +149,8 @@ def main():
         # Check properties - handle both 'values' (list) and 'properties' (dict)
         if "values" in entity:
             for value in entity.get("values", []):
+                if value is None:
+                    continue
                 prop_id = value.get("property")
                 # Handle prop_id being either a string or a dict
                 if isinstance(prop_id, dict):
