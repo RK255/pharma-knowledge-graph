@@ -120,7 +120,7 @@ def run_preflight_menu():
     print("You can now run the pipeline.")
 
 
-# Pipeline steps
+# Pipeline steps - UPDATED PATHS
 STEPS = [
     {
         "num": 1,
@@ -137,13 +137,13 @@ STEPS = [
     {
         "num": 3,
         "name": "NDC Extraction",
-        "script": "03_ndc_bridge/01_extract_ndcs.py",
+        "script": "03_ndc/01_extract_ndcs.py",
         "args": []
     },
     {
         "num": 4,
         "name": "NDC Bridge to GRC-20",
-        "script": "03_ndc_bridge/02_ndc_bridge_to_grc20.py",
+        "script": "03_ndc/02_ndc_bridge_to_grc20.py",
         "args": []
     },
     {
@@ -155,25 +155,25 @@ STEPS = [
     {
         "num": 6,
         "name": "PubChem Properties",
-        "script": "04_pubchem/02_fetch_properties_v2_stream.py",
+        "script": "04_pubchem/02_fetch_properties.py",
         "args": ["--properties", "smiles", "inchikey", "iupac_name", "molecular_weight", "pmid"]
     },
     {
         "num": 7,
         "name": "Merge & Enrich",
-        "script": "05_triple_converter/01_merge_enrich.py",
+        "script": "05_merge/01_merge_enrich.py",
         "args": []
     },
     {
         "num": 8,
         "name": "Link PI to RxNorm",
-        "script": "05_triple_converter/02_link_pi_to_rxnorm.py",
+        "script": "05_merge/02_link_pi_to_rxnorm.py",
         "args": []
     },
     {
         "num": 9,
         "name": "Link DailyMed to RxNorm (Set ID)",
-        "script": "03_ndc_bridge/03_link_dailymed_to_rxnorm_by_setid.py",
+        "script": "06_dailymed_link/01_link_dailymed_to_rxnorm_by_setid.py",
         "args": [],
         "description": "Links PackageInserts to RxNorm using SPL Set IDs (primary) and NDC fallback"
     },
@@ -331,7 +331,6 @@ def main():
                 step['args'] = [f"--rxnorm-file={config['rxnorm_source']}"]
             elif step['num'] == 3:
                 # Pass the extracted directory to the NDC step
-                # The directory name is the zip name, minus .zip, plus _extracted
                 zip_name = config['rxnorm_source']
                 dir_name = zip_name.replace('.zip', '') + '_extracted'
                 rxnorm_extracted_dir = RAW_DATA_DIR / "extracted_rrf" / dir_name

@@ -78,7 +78,7 @@ TTY_TO_ENTITY_TYPE = {
 }
 
 # Primary TTYs for entity classification
-PRIMARY_TTYS = set(TTY_TO_ENTITY_TYPE.keys())
+PRIMARY_TTYS = set(TTY_TO_ENTITY_TYPE.keys()) - {'PSN', 'SY', 'TMSY'}
 
 # TTY priority for determining primary type
 TTY_PRIORITY = [

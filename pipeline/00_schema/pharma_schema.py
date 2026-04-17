@@ -227,7 +227,6 @@ PROPERTIES = {
     "smiles": {"value_type": "TEXT", "description": "SMILES molecular structure"},
     "inchikey": {"value_type": "TEXT", "description": "InChIKey identifier"},
     "iupac_name": {"value_type": "TEXT", "description": "IUPAC systematic name"},
-    "iupac_name": {"value_type": "TEXT", "description": "IUPAC systematic name"},
     "molecular_formula": {"value_type": "TEXT", "description": "Molecular formula"},
     "molecular_weight": {"value_type": "NUMBER", "description": "Molecular weight in Daltons"},
     
@@ -242,7 +241,6 @@ PROPERTIES = {
     "pubchem_date": {"value_type": "TIME", "description": "PubChem data retrieval date"},
     "pmid": {"value_type": "TEXT", "description": "PubMed ID reference"},
     "sid": {"value_type": "TEXT", "description": "PubChem Substance ID"},
-    "mesh_classes": {"value_type": "TEXT", "description": "MeSH classification codes"},
     
     # Provenance properties
     "source": {"value_type": "TEXT", "description": "Data source name"},
