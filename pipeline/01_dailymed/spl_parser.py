@@ -192,6 +192,35 @@ APPLICATION_CODES = {
 }
 
 # =============================================================================
+# TEXT WASHER INTEGRATION
+# =============================================================================
+
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from text_washer import TextWasher
+    TEXT_WASHER_AVAILABLE = True
+except ImportError:
+    TEXT_WASHER_AVAILABLE = False
+    logger.warning("text_washer.py not found. Falling back to basic text extraction.")
+
+
+def wash_section_content(element: ET.Element) -> str:
+    """
+    Extracts text from an element and cleans it using TextWasher if available.
+    Falls back to basic extraction if not.
+    """
+    if element is None:
+        return ""
+    
+    if TEXT_WASHER_AVAILABLE:
+        washer = TextWasher()
+        return washer.wash_element(element)
+    else:
+        # Fallback logic mirrors the TextWasher's basic extraction + basic cleaning
+        return clean_text(extract_text(element))
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -220,11 +249,16 @@ def extract_text(element: ET.Element) -> str:
 
 
 def clean_text(text: str) -> str:
-    """Normalize text content."""
+    """Normalize text content (Basic fallback)."""
     if not text:
         return ""
+    # 1. Normalize line endings
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    # 2. Normalize whitespace
     text = re.sub(r'\s+', ' ', text)
+    # 3. Remove HTML tags
     text = re.sub(r'<[^>]+>', '', text)
+    # 4. Decode entities
     for old, new in [('&amp;', '&'), ('&lt;', '<'), ('&gt;', '>'), ('&quot;', '"'), ('&apos;', "'")]:
         text = text.replace(old, new)
     return text.strip()
@@ -329,13 +363,18 @@ def extract_document_metadata(root: ET.Element, file_path: str) -> Dict[str, Any
 
 
 def extract_section_content(section: ET.Element) -> str:
-    """Extract text content from a section element."""
+    """
+    Extract text content from a section element.
+    NOW USES TEXT WASHER.
+    """
     content_parts = []
     
     # Direct text element
     text_elem = section.find('ns0:text', SPL_NS)
     if text_elem is not None:
-        content_parts.append(extract_text(text_elem))
+        # --- TEXT WASHER CALL ---
+        # We pass the XML element to the washer for deep cleaning
+        content_parts.append(wash_section_content(text_elem))
     
     # Nested sections in components
     for component in section.findall('ns0:component', SPL_NS):
@@ -343,7 +382,8 @@ def extract_section_content(section: ET.Element) -> str:
         if nested is not None:
             nested_text = nested.find('ns0:text', SPL_NS)
             if nested_text is not None:
-                content_parts.append(extract_text(nested_text))
+                # --- TEXT WASHER CALL ---
+                content_parts.append(wash_section_content(nested_text))
     
     return '\n\n'.join(p for p in content_parts if p.strip()).strip()
 
@@ -390,7 +430,7 @@ def extract_sections(root: ET.Element, doc_id: str) -> List[Dict[str, Any]]:
         
         seen_section_ids.add(section_id)
         
-        # Extract content
+        # Extract content (This now calls TextWasher internally)
         content = extract_section_content(section)
         
         parent_sections[section_id] = {

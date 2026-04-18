@@ -13,9 +13,13 @@ Extracts all CID-matched ingredients with their full connectivity:
 - PubChem properties (SMILES, InChIKey, etc.)
 
 Output matches the structure expected by the Geo SDK importer.
+
+Supports --connected-only flag to filter out ingredients with no SCD/SBD connections.
+This is the default behavior as we only want ingredients with NDCs for package insert work.
 """
 
 import json
+import argparse
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
@@ -31,10 +35,10 @@ RXNORM_ENTITIES_FILE = DATA_DIR / "rxnorm_entities_enriched.jsonl"
 RXNORM_RELATIONS_FILE = DATA_DIR / "rxnorm_relations.jsonl"
 CID_MAPPING_FILE = DATA_DIR / "pubchem_cid_mapping.json"
 NDC_TO_RXCUI_FILE = RAW_DATA_DIR / "ndc_to_rxcui.json"
-NDC_TO_SETID_FILE = RAW_DATA_DIR / "ndc_to_setid_final_v3.json"
+NDC_TO_SETID_FILE = RAW_DATA_DIR / "ndc_to_setid.json"
 
 # Output file
-OUTPUT_FILE = OUTPUT_DIR / "test_geo_extraction.json"
+OUTPUT_FILE = OUTPUT_DIR / "full_geo_extraction.json"
 
 # Property IDs (from GRC-20 entities)
 PROP_NAME = 'a126ca530c8e48d5b88882c734c38935'
@@ -151,8 +155,22 @@ def load_rxnorm_relations():
     return dict(forward), dict(reverse)
 
 
+def load_ndc_to_setid_mapping():
+    """Load NDC → Set ID mapping (from RxNorm data only)."""
+    print("Loading NDC → Set ID mapping (from RxNorm)...")
+    
+    with open(NDC_TO_SETID_FILE, 'r') as f:
+        data = json.load(f)
+    
+    ndc_to_setid = data.get('ndc_to_setid', {})
+    
+    print(f"  Loaded {len(ndc_to_setid):,} NDC → Set ID mappings (RxNorm only)")
+    
+    return ndc_to_setid
+
+
 def load_ndc_mappings():
-    """Load NDC to RxCUI and NDC to Set ID mappings."""
+    """Load NDC to RxCUI mappings."""
     print("Loading NDC mappings...")
     
     with open(NDC_TO_RXCUI_FILE, 'r') as f:
@@ -164,12 +182,7 @@ def load_ndc_mappings():
     print(f"  Loaded {len(ndc_to_rxcui):,} NDC -> RxCUI mappings")
     print(f"  Loaded {len(rxcui_to_ndcs):,} RxCUI -> NDCs mappings (pre-built)")
     
-    with open(NDC_TO_SETID_FILE, 'r') as f:
-        data = json.load(f)
-    ndc_to_setid = data.get('ndc_to_setid', {})
-    print(f"  Loaded {len(ndc_to_setid):,} NDC -> Set ID mappings")
-    
-    return ndc_to_rxcui, rxcui_to_ndcs, ndc_to_setid
+    return ndc_to_rxcui, rxcui_to_ndcs
 
 
 def load_cid_mapping():
@@ -202,6 +215,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
     
     in_entity_id = in_entity['id']
     
+    # Use dictionaries to deduplicate by RxCui
     found_scds = {}
     found_sbds = {}
     found_bns = {}
@@ -242,6 +256,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
                 target_rxcui = target_entity['rxcui']
                 
                 if target_tty == 'SCD':
+                    # Dictionary ensures we only store each SCD once
                     found_scds[target_rxcui] = target_entity
                 elif target_tty == 'SBD':
                     found_sbds[target_rxcui] = target_entity
@@ -287,6 +302,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
         for sbd_rxcui in sbd_rxcuis:
             sbd_to_bn[sbd_rxcui] = found_bns.get(bn_rxcui)
     
+    # Convert dictionaries to lists (already deduplicated)
     for rxcui, entity in found_scds.items():
         result['scd'].append({
             'rxcui': rxcui,
@@ -343,13 +359,17 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
 
 
 def add_ndcs_to_connections(connections, rxcui_to_ndcs, ndc_to_setid):
-    """Add NDC data to SCD and SBD entries."""
+    """Add NDC data from RxNorm with Set IDs (from RxNorm)."""
     
     for scd in connections.get('scd', []):
         rxcui = scd['rxcui']
         ndcs = []
         
-        for ndc in rxcui_to_ndcs.get(rxcui, []):
+        # Get NDCs from RxNorm and deduplicate
+        unique_ndcs = set(rxcui_to_ndcs.get(rxcui, []))
+        
+        for ndc in unique_ndcs:
+            # Get Set ID from RxNorm NDC-to-Set ID mapping
             set_id = ndc_to_setid.get(ndc)
             ndcs.append({
                 'ndc': ndc,
@@ -362,7 +382,11 @@ def add_ndcs_to_connections(connections, rxcui_to_ndcs, ndc_to_setid):
         rxcui = sbd['rxcui']
         ndcs = []
         
-        for ndc in rxcui_to_ndcs.get(rxcui, []):
+        # Get NDCs from RxNorm and deduplicate
+        unique_ndcs = set(rxcui_to_ndcs.get(rxcui, []))
+        
+        for ndc in unique_ndcs:
+            # Get Set ID from RxNorm NDC-to-Set ID mapping
             set_id = ndc_to_setid.get(ndc)
             ndcs.append({
                 'ndc': ndc,
@@ -372,6 +396,22 @@ def add_ndcs_to_connections(connections, rxcui_to_ndcs, ndc_to_setid):
         sbd['ndcs'] = ndcs
     
     return connections
+
+
+def has_drug_connections(connections):
+    """Check if an ingredient has any SCD or SBD connections."""
+    return len(connections.get('scd', [])) > 0 or len(connections.get('sbd', [])) > 0
+
+
+def has_ndcs(connections):
+    """Check if an ingredient has any NDCs in its SCD/SBD connections."""
+    for scd in connections.get('scd', []):
+        if scd.get('ndcs'):
+            return True
+    for sbd in connections.get('sbd', []):
+        if sbd.get('ndcs'):
+            return True
+    return False
 
 
 def process_ingredient(ingredient_name, in_rxcui, cid_mapping, rxcui_to_entity, 
@@ -408,13 +448,34 @@ def process_ingredient(ingredient_name, in_rxcui, cid_mapping, rxcui_to_entity,
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description='Extract full GEO connectivity for CID-matched ingredients'
+    )
+    parser.add_argument(
+        '--connected-only',
+        action='store_true',
+        default=True,
+        help='Filter out ingredients with no SCD or SBD connections (default: True)'
+    )
+    parser.add_argument(
+        '--include-without-ndc',
+        action='store_true',
+        help='Include ingredients that have SCD/SBD connections but no NDCs'
+    )
+    args = parser.parse_args()
+    
     print("=" * 80)
     print("EXTRACT FULL GEO CONNECTIVITY (WITH NDCs AND PUBCHEM)")
+    if args.connected_only:
+        print("MODE: Connected Only (filtering ingredients without SCD/SBD)")
+    if not args.include_without_ndc:
+        print("FILTER: Excluding ingredients without NDCs in SCD/SBD")
     print("=" * 80)
     
     rxcui_to_entity, entity_id_to_entity = load_rxnorm_entities()
     forward, reverse = load_rxnorm_relations()
-    ndc_to_rxcui, rxcui_to_ndcs, ndc_to_setid = load_ndc_mappings()
+    ndc_to_rxcui, rxcui_to_ndcs = load_ndc_mappings()
+    ndc_to_setid = load_ndc_to_setid_mapping()
     cid_mapping = load_cid_mapping()
     
     target_ingredients = []
@@ -425,6 +486,8 @@ def main():
     print(f"\nProcessing {len(target_ingredients):,} CID-matched ingredients...")
     
     results = []
+    filtered_no_connections = 0
+    filtered_no_ndcs = 0
     stats = {
         'total_scds': 0,
         'total_sbds': 0,
@@ -432,8 +495,10 @@ def main():
         'total_pins': 0,
         'total_mins': 0,
         'total_dfs': 0,
-        'total_ndcs': 0,
-        'total_set_ids': 0,
+        'total_ndc_occurrences': 0,
+        'unique_ndcs': set(),
+        'ndcs_with_set_ids': 0,
+        'ndcs_without_set_ids': 0,
         'ingredients_with_ndcs': 0,
         'ingredients_with_smiles': 0,
         'ingredients_with_inchikey': 0
@@ -448,6 +513,16 @@ def main():
             rxcui_to_entity, entity_id_to_entity, forward, reverse,
             rxcui_to_ndcs, ndc_to_setid
         )
+        
+        # Check if ingredient has SCD/SBD connections
+        if args.connected_only and not has_drug_connections(result['connections']):
+            filtered_no_connections += 1
+            continue
+        
+        # Check if ingredient has NDCs in SCD/SBD connections
+        if not args.include_without_ndc and not has_ndcs(result['connections']):
+            filtered_no_ndcs += 1
+            continue
         
         results.append(result)
         
@@ -464,32 +539,59 @@ def main():
         if result.get('inchi_key'):
             stats['ingredients_with_inchikey'] += 1
         
-        has_ndcs = False
+        has_ndcs_in_ingredient = False
         for scd in conn.get('scd', []):
             ndcs = scd.get('ndcs', [])
-            stats['total_ndcs'] += len(ndcs)
-            stats['total_set_ids'] += sum(1 for n in ndcs if n.get('set_id'))
+            stats['total_ndc_occurrences'] += len(ndcs)
+            for ndc in ndcs:
+                stats['unique_ndcs'].add(ndc['ndc'])
+                if ndc.get('set_id'):
+                    stats['ndcs_with_set_ids'] += 1
+                else:
+                    stats['ndcs_without_set_ids'] += 1
             if ndcs:
-                has_ndcs = True
+                has_ndcs_in_ingredient = True
         
         for sbd in conn.get('sbd', []):
             ndcs = sbd.get('ndcs', [])
-            stats['total_ndcs'] += len(ndcs)
-            stats['total_set_ids'] += sum(1 for n in ndcs if n.get('set_id'))
+            stats['total_ndc_occurrences'] += len(ndcs)
+            for ndc in ndcs:
+                stats['unique_ndcs'].add(ndc['ndc'])
+                if ndc.get('set_id'):
+                    stats['ndcs_with_set_ids'] += 1
+                else:
+                    stats['ndcs_without_set_ids'] += 1
             if ndcs:
-                has_ndcs = True
+                has_ndcs_in_ingredient = True
         
-        if has_ndcs:
+        if has_ndcs_in_ingredient:
             stats['ingredients_with_ndcs'] += 1
+    
+    unique_ndc_count = len(stats['unique_ndcs'])
+    
+    if args.connected_only:
+        print(f"\nFiltered out {filtered_no_connections:,} ingredients with no SCD/SBD connections")
+    if not args.include_without_ndc:
+        print(f"Filtered out {filtered_no_ndcs:,} ingredients with SCD/SBD but no NDCs")
+    print(f"Kept {len(results):,} ingredients with NDCs")
     
     print(f"\nSaving to: {OUTPUT_FILE}")
     with open(OUTPUT_FILE, 'w') as f:
         json.dump(results, f, indent=2)
     
+    # Calculate Set ID coverage by occurrence (not by unique NDCs)
+    set_id_coverage = 0.0
+    if stats['total_ndc_occurrences'] > 0:
+        set_id_coverage = (stats['ndcs_with_set_ids'] / stats['total_ndc_occurrences']) * 100
+    
     print("\n" + "=" * 80)
     print("EXTRACTION COMPLETE")
     print("=" * 80)
     print(f"Total Ingredients: {len(results):,}")
+    if args.connected_only:
+        print(f"Filtered Out (no SCD/SBD): {filtered_no_connections:,}")
+    if not args.include_without_ndc:
+        print(f"Filtered Out (no NDCs): {filtered_no_ndcs:,}")
     print(f"")
     print(f"PubChem Properties:")
     print(f"  Ingredients with SMILES: {stats['ingredients_with_smiles']:,}")
@@ -503,10 +605,14 @@ def main():
     print(f"  Total MINs: {stats['total_mins']:,}")
     print(f"  Total Dose Forms: {stats['total_dfs']:,}")
     print(f"")
-    print(f"NDCs:")
+    print(f"NDCs (from RxNorm):")
     print(f"  Ingredients with NDCs: {stats['ingredients_with_ndcs']:,}")
-    print(f"  Total NDCs: {stats['total_ndcs']:,}")
-    print(f"  Total Set IDs: {stats['total_set_ids']:,}")
+    print(f"  Total NDC occurrences: {stats['total_ndc_occurrences']:,}")
+    print(f"  Distinct NDCs (unique products): {unique_ndc_count:,}")
+    print(f"  NDCs shared across multiple ingredients: {stats['total_ndc_occurrences'] - unique_ndc_count:,}")
+    print(f"  NDCs with Set IDs: {stats['ndcs_with_set_ids']:,}")
+    print(f"  NDCs without Set IDs: {stats['ndcs_without_set_ids']:,}")
+    print(f"  Set ID coverage (by occurrence): {set_id_coverage:.1f}%")
     print(f"")
     print(f"Output: {OUTPUT_FILE}")
     print("=" * 80)

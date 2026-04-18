@@ -34,7 +34,7 @@ def run_ftp_ripper(output_dir: Path, limit: int = None):
     print("=" * 80)
     
     try:
-        from ftp_ripper import download_dailymed
+        from .ftp_ripper import download_dailymed
         xml_dir = output_dir / "dailymed_xml"
         xml_dir.mkdir(parents=True, exist_ok=True)
         download_dailymed(str(xml_dir), limit=limit)
@@ -117,7 +117,7 @@ def run_validate(output_dir: Path) -> bool:
     
     try:
         from validate import validate_grc20
-        entities_file = output_dir / "dailymed_entities.json"
+        entities_file = output_dir / "dailymed_entities.jsonl"
         
         if not entities_file.exists():
             print(f"ERROR: Entities file not found: {entities_file}")
