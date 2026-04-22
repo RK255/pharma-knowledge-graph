@@ -39,3 +39,4 @@ Thumbs.db
 *.temp
 *.bak
 07_export/archive/
+.env
