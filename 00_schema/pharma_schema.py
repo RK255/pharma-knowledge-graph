@@ -261,6 +261,15 @@ PROPERTIES = {
     # Clinical properties
     "clinical_weight": {"value_type": "NUMBER", "description": "Weighted clinical relationship"},
     "evidence": {"value_type": "TEXT", "description": "Evidence supporting a clinical relationship"},
+    
+    # UNII (FDA Unique Ingredient Identifier)
+    "unii_code": {"value_type": "TEXT", "description": "FDA UNII (Unique Ingredient Identifier)"},
+
+    # NDC properties (multiple formats)
+    "ndc_code": {"value_type": "TEXT", "description": "National Drug Code (main format, NDC11 with hyphens)"},
+    "ndc11_hyphens": {"value_type": "TEXT", "description": "NDC11 with hyphens (5-4-2 format)"},
+    "ndc11_no_hyphens": {"value_type": "TEXT", "description": "NDC11 without hyphens (11 digits)"},
+    "ndc10_hyphens": {"value_type": "TEXT", "description": "NDC10 with hyphens (from MTHSPL)"},
 }
 
 # =============================================================================
