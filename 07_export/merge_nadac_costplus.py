@@ -44,7 +44,7 @@ def load_pricing_file(filepath, price_key, has_price_key):
         
         # Extract price - try various field names
         price = None
-        for key in ['unit_price', 'unit_billing_price', 'price', 'nadac_unit_price', 'costplus_unit_price']:
+        for key in ['unit_billing_price', 'unit_price', 'price', 'nadac_unit_price', 'costplus_unit_price']:
             if key in entry and entry[key] is not None:
                 try:
                     price = float(entry[key])

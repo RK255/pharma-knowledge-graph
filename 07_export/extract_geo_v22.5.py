@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract GEO with Pricing v22.4 - SBD Name Reformatting
+Extract GEO with Pricing v22.5 - SBD Name Reformatting
 ======================================================
 - SCDs, SBDs, BNs, DFs, NDCs nest under PINs
 - SBDs nested under PIN get brand_name from their BN
@@ -27,7 +27,7 @@ CID_MAPPING_FILE = DATA_DIR / "pubchem_cid_mapping.json"
 NDC_MERGED_FILE = RAW_DATA_DIR / "ndc_merged.json"
 NDC_TO_SETID_FILE = RAW_DATA_DIR / "ndc_to_setid.json"
 PRICING_FILE = BASE_DIR / "data" / "pricing" / "analysis" / "pricing_for_your_ndcs.json"
-OUTPUT_FILE = OUTPUT_DIR / "full_geo_extraction_v22.4.jsonl"
+OUTPUT_FILE = OUTPUT_DIR / "full_geo_extraction_v22.5.jsonl"
 
 # Property IDs
 PROP_NAME = 'a126ca530c8e48d5b88882c734c38935'
@@ -57,6 +57,49 @@ REL_HAS_DOSE_FORM = '29f07e00f9d45f76aef7e6c03f00441b'
 REL_DOSE_FORM_OF = 'cbf90e604bf458719df7ad10fd90c07f'
 
 BLOCKED_TTYS = {'TMSY', 'PSN', 'SY'}
+INJECTABLE_DOSE_FORMS = ['Auto-Injector', 'Prefilled Syringe']
+
+
+def apply_injectable_dose_calculation(name):
+    """
+    For Prefilled Syringe / Auto-Injector forms only, transform:
+        "<prefix> CONC MG/ML <FORM> <VOL> ML <suffix>"
+    into:
+        "<prefix> TOTAL MG (CONC MG/ML) <FORM> <VOL> ML <suffix>"
+    where TOTAL = CONC × VOL.
+
+    Intentionally narrow: skips combos and powder-for-reconstitution forms.
+    """
+    # Skip if already transformed
+    if re.search(r'\d+(?:\.\d+)?\s*MG\s*\(', name, re.IGNORECASE):
+        return name
+
+    forms_pattern = '|'.join(
+        f.replace('-', r'[-\s]').replace(' ', r'[-\s]') for f in INJECTABLE_DOSE_FORMS
+    )
+    pattern = (
+        r'^(.*?\s)(\d+(?:\.\d+)?)\s*MG/ML\s+(' + forms_pattern + r')\s+'
+        r'(\d+(?:\.\d+)?)\s*ML\b(.*)$'
+    )
+    m = re.match(pattern, name, re.IGNORECASE)
+    if not m:
+        return name
+
+    before = m.group(1)
+    # Skip combos (multiple MG/ML in prefix, or " / " separator)
+    if re.search(r'MG/ML', before, re.IGNORECASE) or ' / ' in before:
+        return name
+
+    conc_str = m.group(2)
+    form = m.group(3)
+    vol_str = m.group(4)
+    after = m.group(5)
+
+    total = round(float(conc_str) * float(vol_str), 6)
+    # Strip trailing zeros: 80.0 -> "80", 0.0012 -> "0.0012"
+    total_str = f"{total:.6f}".rstrip('0').rstrip('.')
+
+    return f"{before}{total_str} MG ({conc_str} MG/ML) {form} {vol_str} ML{after}"
 
 # =============================================================================
 # SBD NAME REFORMATTING
@@ -72,7 +115,12 @@ DOSE_UNITS = [
     'VECTOR-GENOMES/ML', 'EIN/ML', 'VIRAL-PARTICLES/ML', 'UNT/ML',
 ]
 
-RELEASE_MODIFIERS = ['9 HR', '12 HR', '24 HR', '72 HR', '84 HR', '168 HR', 'SR', 'ER', 'XR', 'CR', 'LA', 'SA', 'XL']
+RELEASE_MODIFIERS = [
+    '9 HR', '12 HR', '24 HR', '72 HR', '84 HR', '168 HR',
+    '8 HR',
+    'SR', 'ER', 'XR', 'CR', 'LA', 'SA', 'XL',
+    '3-Bead',
+]
 
 # Duration/quantity modifiers at START of name (move to end)
 DURATION_MODIFIERS = [
@@ -331,8 +379,7 @@ def reformat_sbd_name(name, brand_name_from_bn=None):
                 result += f" {duration_mod}"
             if extra_dose:
                 result += f" {extra_dose}"
-            return result
-    
+            return apply_injectable_dose_calculation(result) 
     # Step 5: Find first dose position
     dose_pos = find_first_dose_position(name_after_container)
     if dose_pos == -1:
@@ -340,9 +387,15 @@ def reformat_sbd_name(name, brand_name_from_bn=None):
     
     ingredient_part = name_after_container[:dose_pos].strip()
     
-    # Step 6: Extract release modifier from ingredient (12 HR, 24 HR, etc.)
-    release_mod, ingredient_part = extract_release_modifier(ingredient_part)
-    
+    # Step 6: Extract release modifiers from ingredient (loop to handle chains
+    # like "3-Bead 24 HR ingredient")
+    release_mods = []
+    while True:
+        mod, ingredient_part = extract_release_modifier(ingredient_part)
+        if not mod:
+            break
+        release_mods.append(mod)
+
     # Step 7: Extract ingredient prefix (Preservative-Free, Once-Daily, etc.)
     ingredient_prefix, ingredient_part = extract_ingredient_prefix(ingredient_part)
     
@@ -361,17 +414,88 @@ def reformat_sbd_name(name, brand_name_from_bn=None):
     
     # Build result
     result = f"{brand} [{ingredient_part}] {dose} {dose_form}"
-    if release_mod:
-        result += f" {release_mod}"
+    if release_mods:
+        result += ' ' + ' '.join(release_mods)
     if container:
         result += f" {container}"
     if duration_mod:
         result += f" {duration_mod}"
     if extra_dose:
         result += f" {extra_dose}"
-    
-    return result
 
+    return apply_injectable_dose_calculation(result)
+
+def reformat_scd_name(name):
+    """
+    Reformat SCD name to move leading modifiers/container sizes to the end,
+    and apply injectable dose calculation for PFS/Auto-Injector forms.
+
+    Examples:
+      '0.8 ML adalimumab-aaty 100 MG/ML Auto-Injector'
+      -> 'adalimumab-aaty 80 MG (100 MG/ML) Auto-Injector 0.8 ML'
+
+      '3-Bead 24 HR amphetamine aspartate 3.125 MG Extended Release Oral Capsule'
+      -> 'amphetamine aspartate 3.125 MG Extended Release Oral Capsule 3-Bead 24 HR'
+
+      '21 DAY ethinyl estradiol 0.000625 MG/HR / etonogestrel 0.005 MG/HR Vaginal System'
+      -> 'ethinyl estradiol / etonogestrel 0.000625 MG/HR / 0.005 MG/HR Vaginal System 21 DAY'
+    """
+    if not name:
+        return name
+
+    working = name
+    trailing = []
+
+    # Extract leading duration modifiers (loop)
+    while True:
+        mod, working = extract_duration_modifier(working)
+        if not mod:
+            break
+        trailing.append(mod)
+
+    # Extract leading release modifiers (loop)
+    while True:
+        mod, working = extract_release_modifier(working)
+        if not mod:
+            break
+        trailing.append(mod)
+
+    # Extract leading container size (loop)
+    while True:
+        container, working = extract_container_size(working)
+        if not container:
+            break
+        trailing.append(container)
+
+    # One more pass of release modifiers (handles "0.1 ML 12 HR ..." pattern)
+    while True:
+        mod, working = extract_release_modifier(working)
+        if not mod:
+            break
+        trailing.append(mod)
+
+    # Find dose position; if none, return as-is with trailing parts
+    dose_pos = find_first_dose_position(working)
+    if dose_pos == -1:
+        result = working
+        if trailing:
+            result = working + ' ' + ' '.join(trailing)
+        return apply_injectable_dose_calculation(result)
+
+    # Combo: leave the ingredients/doses/form as-is, just append trailing
+    if ' / ' in working:
+        parsed = parse_combo_product(working)
+        if parsed:
+            result = f"{parsed['ingredients']} {parsed['doses']} {parsed['dose_form']}"
+            if trailing:
+                result += ' ' + ' '.join(trailing)
+            return apply_injectable_dose_calculation(result)
+
+    # Single-ingredient: keep structure, just append trailing parts
+    result = working
+    if trailing:
+        result += ' ' + ' '.join(trailing)
+    return apply_injectable_dose_calculation(result)
 
 # =============================================================================
 # DATA LOADING
@@ -740,6 +864,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
                 df_entity = entity_id_to_entity.get(df_id)
                 if df_entity and df_entity['tty'] == 'DF':
                     found_dfs[df_entity['rxcui']] = df_entity
+
     # ── NEW: Discover combo MINs reachable via PINs (IN → PIN → MIN) ─────────
     # Some MINs (e.g. Adderall: amphetamine aspartate / sulfate / dextro-* salts)
     # have HAS_PART relations to PIN entities, not to base INs directly.
@@ -750,7 +875,8 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
             if source_entity and source_entity['tty'] == 'MIN':
                 if source_entity['rxcui'] not in found_mins:
                     found_mins[source_entity['rxcui']] = source_entity
-    # ─────────────────────────────────────────────────────────────────────────    
+    # ─────────────────────────────────────────────────────────────────────────
+    
     # PIN groups
     pin_groups, found_scds, found_sbds, found_bns, found_dfs = find_pin_groups(
         in_entity_id, found_pins, found_scds, found_sbds, found_bns, found_dfs,
@@ -789,7 +915,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
             if not already_moved and scd_entity['rxcui'] in found_scds:
                 min_info['combo_scds'].append({
                     'rxcui': scd_entity['rxcui'],
-                    'name': scd_entity['name'],
+                    'name': reformat_scd_name(scd_entity['name']),
                     'tty': 'SCD',
                     'ingredients': min_info['ingredients'],
                     'ndcs': []
@@ -844,7 +970,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
             if {i['rxcui'] for i in min_info['ingredients']} == {i['rxcui'] for i in ingredients}:
                 min_info['combo_scds'].append({
                     'rxcui': scd_rxcui,
-                    'name': scd_entity['name'],
+                    'name': reformat_scd_name(scd_entity['name']),
                     'tty': 'SCD',
                     'ingredients': ingredients,
                     'ndcs': []
@@ -916,7 +1042,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
             'rxcui': pin_rxcui,
             'name': pin_data['entity']['name'],
             'tty': 'PIN',
-            'scd': [{'rxcui': rxc, 'name': ent['name'], 'tty': 'SCD', 'ndcs': []} for rxc, ent in pin_data['scd'].items()],
+            'scd': [{'rxcui': rxc, 'name': reformat_scd_name(ent['name']), 'tty': 'SCD', 'ndcs': []} for rxc, ent in pin_data['scd'].items()],
             'bn': [{'rxcui': rxc, 'name': ent['name'], 'tty': 'BN'} for rxc, ent in pin_data['bn'].items()],
             'sbd': sbd_list,
             'df': [{'rxcui': rxc, 'name': ent['name'], 'tty': 'DF'} for rxc, ent in pin_data['df'].items()]
@@ -925,7 +1051,7 @@ def find_connected_entities(in_rxcui, rxcui_to_entity, entity_id_to_entity, forw
     
     # Flat SCDs/SBDs/BNs/DFs
     for rxcui, entity in found_scds.items():
-        result['scd'].append({'rxcui': rxcui, 'name': entity['name'], 'tty': 'SCD', 'ndcs': []})
+        result['scd'].append({'rxcui': rxcui, 'name': reformat_scd_name(entity['name']), 'tty': 'SCD', 'ndcs': []})
     
     for rxcui, entity in found_sbds.items():
         brand_name = None
@@ -1121,7 +1247,7 @@ def main():
     args = parser.parse_args()
     
     print("=" * 80)
-    print("EXTRACT GEO V22.4 - SBD Name Reformatting")
+    print("EXTRACT GEO V22.5 - SBD/SCD Name Reformatting")
     print("  SBD names reformatted: 'Brand [ingredient] dose form'")
     print("  NDA/ANDA numbers stripped from SBD names")
     print("  Duration modifiers (21 DAY, 28 DAY) moved to end")
