@@ -67,3 +67,4 @@ _archive/
 # Schema cache (regenerated)
 00_schema/schema_cache.json
 00_schema/.schema_cache/
+RELEASE_AUDIT.md
