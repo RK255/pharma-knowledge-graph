@@ -7,9 +7,12 @@ import zipfile
 import shutil
 from pathlib import Path
 from datetime import datetime
+import sys
 
 # Configuration
-BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config
+BASE_DIR = str(config.BASE_DIR)
 DAILYMED_DIR = f"{BASE_DIR}/data/dailymed"
 RAW_DIR = f"{DAILYMED_DIR}/raw"
 EXTRACTED_DIR = f"{DAILYMED_DIR}/extracted"

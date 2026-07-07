@@ -13,12 +13,14 @@ Output includes:
 - Complete mapping file with all NDCs and their associated data
 """
 
+import sys
 import json
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 
-BASE_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BASE_DIR
 DATA_DIR = BASE_DIR / "data" / "grc20_v2"
 RAW_DATA_DIR = BASE_DIR / "data" / "raw_data"
 

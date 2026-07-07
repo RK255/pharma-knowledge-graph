@@ -7,13 +7,17 @@ Output:   pricing_for_your_ndcs.json (in format expected by extractor)
 """
 import json
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BASE_DIR, PRICING_DIR
 
 # Input files
-NADAC_FILE = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/scripts/production/pricing/data/US/nadac_pricing_report.json")
-COSTPLUS_FILE = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/scripts/production/pricing/data/US/costplus_pricing_report.json")
+NADAC_FILE = PRICING_DIR / "data" / "US" / "nadac_pricing_report.json"
+COSTPLUS_FILE = PRICING_DIR / "data" / "US" / "costplus_pricing_report.json"
 
 # Output file (where v21 expects it)
-OUTPUT_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/pricing/analysis")
+OUTPUT_DIR = BASE_DIR / "data" / "pricing" / "analysis"
 OUTPUT_FILE = OUTPUT_DIR / "pricing_for_your_ndcs.json"
 
 

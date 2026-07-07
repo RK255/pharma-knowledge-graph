@@ -298,3 +298,29 @@ def reformat_scd_name(name):
     if trailing:
         result += ' ' + ' '.join(trailing)
     return apply_injectable_dose_calculation(result)
+
+# ── GPCK / BPCK pack name formatters ─────────────────────────────────────────
+
+def reformat_gpck_name(name: str) -> str:
+    """GPCK pack names need no structural change — strip whitespace only."""
+    return name.strip()
+
+
+def reformat_bpck_name(name: str) -> str:
+    """
+    Move the trailing [Brand Name] to the front, matching the SBD pattern.
+
+      {12 (Drug A) / 9 (Drug B) } Pack [Brand]
+      → Brand {12 (Drug A) / 9 (Drug B) } Pack
+
+    Falls back to returning the input unchanged if no valid trailing
+    [Brand Name] is found, so no data is silently lost on unexpected formats.
+    """
+    name       = name.strip()
+    last_open  = name.rfind('[')
+    last_close = name.rfind(']')
+    if last_open == -1 or last_close != len(name) - 1:
+        return name
+    brand = name[last_open + 1 : last_close].strip()
+    pack  = name[:last_open].strip()
+    return f"{brand} {pack}" if brand else name

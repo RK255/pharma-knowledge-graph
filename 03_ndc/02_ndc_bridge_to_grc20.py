@@ -15,8 +15,8 @@ from collections import defaultdict
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..', '00_schema')))
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..')))
 from pharma_schema import PharmaSchema, generate_uuid
-
-BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
+import config
+BASE_DIR = str(config.BASE_DIR)
 DATA_DIR = f"{BASE_DIR}/data/raw_data"
 OUTPUT_DIR = f"{BASE_DIR}/data/grc20_v2"
 

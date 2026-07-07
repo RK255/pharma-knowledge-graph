@@ -13,7 +13,8 @@ from datetime import datetime
 from collections import defaultdict
 import uuid
 
-BASE_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BASE_DIR
 DATA_DIR = BASE_DIR / "data" / "grc20_v2"
 DEFAULT_OUTPUT = DATA_DIR / "grc20_merged"
 

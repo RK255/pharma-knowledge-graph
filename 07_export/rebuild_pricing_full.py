@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Rebuild pricing file with both NADAC and CostPlus"""
+import sys
 import json
 import csv
 from pathlib import Path
 
-BASE_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BASE_DIR
 PIPELINE_FILE = BASE_DIR / "data" / "pricing" / "reports" / "pricing_for_pipeline.jsonl"
 NADAC_FILE = BASE_DIR / "data" / "pricing" / "nadac_current.csv"
 OUTPUT_FILE = BASE_DIR / "data" / "pricing" / "analysis" / "pricing_for_your_ndcs.json"

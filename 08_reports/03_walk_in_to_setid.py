@@ -5,11 +5,13 @@ Walk the path: IN → Target TTYs (SCD, SCDG, SBD, BN) → SCD/SBD/BPCK/GPCK →
 Filters relationships by type to avoid walking through unrelated drugs.
 """
 
+import sys
 import json
 from pathlib import Path
 from collections import defaultdict
 
-BASE_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BASE_DIR
 DATA_DIR = BASE_DIR / "data" / "grc20_v2"
 RAW_DATA_DIR = BASE_DIR / "data" / "raw_data"
 

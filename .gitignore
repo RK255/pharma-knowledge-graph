@@ -40,3 +40,30 @@ Thumbs.db
 *.bak
 07_export/archive/
 .env
+
+# Backups and merge artifacts
+*.backup
+*.orig
+*.rej
+
+# Virtual environments
+.venv/
+venv/
+env/
+**/venv/
+
+# Build / distribution
+build/
+dist/
+.env.*
+!.env.example
+
+# Logs directory
+logs/
+
+# Archived legacy code
+_archive/
+
+# Schema cache (regenerated)
+00_schema/schema_cache.json
+00_schema/.schema_cache/

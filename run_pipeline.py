@@ -17,10 +17,10 @@ sys.path.insert(0, str(Path(__file__).parent / "00_schema"))
 from pharma_schema import PharmaSchema
 
 # Configuration
-BASE_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/scripts/production/pipeline")
-DATA_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/grc20_v2")
-DAILYMED_XML_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/dailymed/xml_only")
-RAW_DATA_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/raw_data")
+from config import PIPELINE_DIR, GRC20_OUTPUT_DIR, DAILYMED_DIR, RAW_DATA_DIR
+BASE_DIR = PIPELINE_DIR
+DATA_DIR = GRC20_OUTPUT_DIR
+DAILYMED_XML_DIR = DAILYMED_DIR / "xml_only"
 CONFIG_FILE = DATA_DIR / "pipeline_config.json"
 
 
@@ -142,49 +142,55 @@ STEPS = [
     },
     {
         "num": 4,
+        "name": "NDC Set ID Mapping",
+        "script": "03_ndc/02_build_ndc_setid.py",
+        "args": []
+    },
+    {
+        "num": 5,
         "name": "NDC Bridge to GRC-20",
         "script": "03_ndc/02_ndc_bridge_to_grc20.py",
         "args": []
     },
     {
-        "num": 5,
+        "num": 6,
         "name": "PubChem CID Matching",
         "script": "04_pubchem/01_enrich_by_cid.py",
         "args": []
     },
     {
-        "num": 6,
+        "num": 7,
         "name": "PubChem Properties",
         "script": "04_pubchem/02_fetch_properties.py",
         "args": ["--properties", "smiles", "inchikey", "iupac_name", "molecular_weight", "pmid"]
     },
     {
-        "num": 7,
+        "num": 8,
         "name": "Merge & Enrich",
         "script": "05_merge/01_merge_enrich.py",
         "args": []
     },
     {
-        "num": 8,
+        "num": 9,
         "name": "Link PI to RxNorm",
         "script": "05_merge/02_link_pi_to_rxnorm.py",
         "args": []
     },
     {
-        "num": 9,
+        "num": 10,
         "name": "Link DailyMed to RxNorm (Set ID)",
         "script": "06_dailymed_link/01_link_dailymed_to_rxnorm_by_setid.py",
         "args": [],
         "description": "Links PackageInserts to RxNorm using SPL Set IDs (primary) and NDC fallback"
     },
     {
-        "num": 10,
+        "num": 11,
         "name": "Ensure 100% Provenance",
         "script": "internal",
         "args": []
     },
     {
-        "num": 11,
+        "num": 12,
         "name": "Validate All",
         "script": "00_schema/validate_all.py",
         "args": []

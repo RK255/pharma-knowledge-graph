@@ -46,7 +46,8 @@ if CACHE_FILE_PATH.exists():
 # CONFIGURATION
 # =============================================================================
 
-BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
+import config
+BASE_DIR = str(config.BASE_DIR)
 RAW_DATA_DIR = f"{BASE_DIR}/data/raw_data"
 EXTRACTED_DIR = f"{RAW_DATA_DIR}/extracted_rrf"
 OUTPUT_DIR = f"{BASE_DIR}/data/grc20_v2"

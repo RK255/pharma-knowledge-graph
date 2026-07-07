@@ -29,7 +29,8 @@ drugs = [
     "Mirtazapine", "Lorazepam", "Levetiracetam"
 ]
 
-output_dir = "/mnt/fast_raid/server_projects/Geo/graph_workshop/data/drug_descriptions"
+from config import BASE_DIR
+output_dir = str(BASE_DIR / "data" / "drug_descriptions")
 os.makedirs(output_dir, exist_ok=True)
 
 def find_section(sections, target_keywords):

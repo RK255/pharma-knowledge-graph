@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
 """
-quarterback.py — Geo Extract v23
+quarterback.py — Geo Extract v25
 =================================
-Modular refactor of extract_geo_v22.6.py.
-
-What's new in v23:
-  - Script broken into governed modules under 07_export/geo_extract/
-  - GPCK and BPCK packs now nest inside SCD and SBD objects respectively
-  - Each pack carries its own ndcs[] with full ndc10/ndc11/spl_set_id/pricing
-  - has_ndcs_anywhere filter accounts for pack-level NDCs
-  - All v22.6 output fields and name reformatting preserved exactly
+Modular refactor of extract_geo_v24.py.
 
 Usage:
   python3 quarterback.py [--debug]
@@ -75,10 +68,10 @@ def main():
     args = parser.parse_args()
 
     print("=" * 80)
-    print("EXTRACT GEO V23")
-    print("  [v22.6] Combo BNs / SCD→HAS_TRADENAME / ACTUAT container sizes")
-    print("  [v22.7] Device qualifiers (Sensor→Digihaler)")
+    print("EXTRACT GEO V25")
     print("  [v23]   GPCK/BPCK packs with NDCs nested inside SCD/SBD objects")
+    print("  [v24]   Correct Set ID Mapping and improve active NDC extraction")
+    print("  [v25]   Add new NDC properties for dosage form and labeler")
     print("=" * 80)
 
     # ── Load all data ─────────────────────────────────────────────────────────

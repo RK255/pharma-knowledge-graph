@@ -14,8 +14,11 @@ Merge key: Physical NDC (strip leading zeros from all segments)
 import json
 from pathlib import Path
 from collections import defaultdict
+import sys
 
-BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config
+BASE_DIR = str(config.BASE_DIR)
 INPUT_FILE = Path(f"{BASE_DIR}/data/raw_data/ndc_to_rxcui.json")
 OUTPUT_FILE = Path(f"{BASE_DIR}/data/raw_data/ndc_merged.json")
 

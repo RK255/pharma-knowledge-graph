@@ -11,9 +11,10 @@ from pathlib import Path
 from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pharma_schema import PharmaSchema
-
-DATA_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/data/grc20_v2")
+from config import GRC20_OUTPUT_DIR
+DATA_DIR = GRC20_OUTPUT_DIR
 ENTITIES_FILE = DATA_DIR / "grc20_merged_entities.jsonl"
 RELATIONS_FILE = DATA_DIR / "grc20_merged_relations.jsonl"
 SCHEMA_CACHE = Path(__file__).parent / "schema_cache.json"

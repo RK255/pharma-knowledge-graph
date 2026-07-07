@@ -7,6 +7,23 @@ need to hardcode a specific relation UUID. If a GPCK/BPCK entity touches an
 SCD/SBD via any relation in either direction, we capture it.
 """
 from collections import defaultdict
+from name_formatter import reformat_gpck_name, reformat_bpck_name  # ← NEW
+
+
+def _format_pack_entity(entity: dict) -> dict:
+    """
+    Return a shallow copy of the entity with its name reformatted.
+    We copy rather than mutate so rxcui_to_entity stays pristine.
+    """
+    tty  = entity.get('tty', '')
+    name = entity.get('name', '')
+    if tty == 'BPCK':
+        formatted = reformat_bpck_name(name)
+    elif tty == 'GPCK':
+        formatted = reformat_gpck_name(name)
+    else:
+        return entity  # shouldn't happen, but safe fallback
+    return {**entity, 'name': formatted}  # ← NEW
 
 
 def build_pack_index(rxcui_to_entity, entity_id_to_entity, forward, reverse):
@@ -17,8 +34,8 @@ def build_pack_index(rxcui_to_entity, entity_id_to_entity, forward, reverse):
         drug_to_packs: {drug_rxcui: [pack_entity_dict, ...]}
             Each list may contain a mix of GPCK and BPCK entities.
             Callers filter by entity['tty'] to get gpck vs bpck separately.
+            Names are already reformatted (brand moved to front for BPCK).
     """
-    # drug_rxcui -> {pack_rxcui: pack_entity}  (dict keyed by rxcui deduplicates)
     drug_to_pack_map = defaultdict(dict)
 
     pack_count = 0
@@ -28,7 +45,8 @@ def build_pack_index(rxcui_to_entity, entity_id_to_entity, forward, reverse):
             continue
 
         pack_count += 1
-        eid = entity['id']
+        eid            = entity['id']
+        packed_entity  = _format_pack_entity(entity)  # ← NEW — format once here
 
         # forward: pack ──rel──→ drug component
         for _rel, target_id in forward.get(eid, []):
@@ -38,7 +56,7 @@ def build_pack_index(rxcui_to_entity, entity_id_to_entity, forward, reverse):
             if target.get('tty') in ('SCD', 'SBD'):
                 drug_rxcui = target.get('rxcui')
                 if drug_rxcui:
-                    drug_to_pack_map[drug_rxcui][rxcui] = entity
+                    drug_to_pack_map[drug_rxcui][rxcui] = packed_entity  # ← was entity
 
         # reverse: drug component ──rel──→ pack
         for _rel, source_id in reverse.get(eid, []):
@@ -48,7 +66,7 @@ def build_pack_index(rxcui_to_entity, entity_id_to_entity, forward, reverse):
             if source.get('tty') in ('SCD', 'SBD'):
                 drug_rxcui = source.get('rxcui')
                 if drug_rxcui:
-                    drug_to_pack_map[drug_rxcui][rxcui] = entity
+                    drug_to_pack_map[drug_rxcui][rxcui] = packed_entity  # ← was entity
 
     drug_to_packs = {k: list(v.values()) for k, v in drug_to_pack_map.items()}
 

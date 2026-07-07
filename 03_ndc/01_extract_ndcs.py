@@ -12,12 +12,12 @@ import sys
 from datetime import datetime
 from collections import defaultdict
 
-BASE_DIR = "/mnt/fast_raid/server_projects/Geo/graph_workshop"
+sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..')))
+import config
+BASE_DIR = str(config.BASE_DIR)
 RAW_DATA_DIR = f"{BASE_DIR}/data/raw_data"
 EXTRACTED_DIR = f"{RAW_DATA_DIR}/extracted_rrf"
 OUTPUT_DIR = f"{BASE_DIR}/data/raw_data"
-
-sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), '..')))
 from shared_state import load_source_selection, save_source_selection
 
 

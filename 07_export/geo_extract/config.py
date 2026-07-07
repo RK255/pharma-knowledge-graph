@@ -1,7 +1,10 @@
 # config.py
+import sys
 from pathlib import Path
 
-BASE_DIR     = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from config import BASE_DIR
+
 DATA_DIR     = BASE_DIR / "data" / "grc20_v2"
 RAW_DATA_DIR = BASE_DIR / "data" / "raw_data"
 OUTPUT_DIR   = BASE_DIR / "scripts" / "production" / "geo-ingestor" / "data_to_publish"
@@ -12,7 +15,7 @@ CID_MAPPING_FILE      = DATA_DIR     / "pubchem_cid_mapping.json"
 NDC_MERGED_FILE       = RAW_DATA_DIR / "ndc_merged.json"
 NDC_TO_SETID_FILE     = RAW_DATA_DIR / "ndc_to_setid.json"
 PRICING_FILE          = BASE_DIR / "data" / "pricing" / "analysis" / "pricing_for_your_ndcs.json"
-OUTPUT_FILE           = OUTPUT_DIR / "full_geo_extraction_v23.jsonl"
+OUTPUT_FILE           = OUTPUT_DIR / "full_geo_extraction_v25.jsonl"
 
 # ── Property IDs ──────────────────────────────────────────────────────────────
 PROP_NAME      = 'a126ca530c8e48d5b88882c734c38935'

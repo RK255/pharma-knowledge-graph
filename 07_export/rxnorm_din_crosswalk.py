@@ -5,10 +5,13 @@ import json
 import pandas as pd
 from pathlib import Path
 import re
+import sys
 from collections import defaultdict
 
-BASE_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/scripts/production/pricing")
-GEO_DIR = Path("/mnt/fast_raid/server_projects/Geo/graph_workshop/scripts/production/geo-ingestor")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import BASE_DIR, PRICING_DIR
+BASE_DIR = PRICING_DIR
+GEO_DIR = BASE_DIR.parent / "geo-ingestor"
 
 # Salt removal for matching
 SALTS = [
